@@ -16,29 +16,37 @@ router.post('/', authMiddleware, async (req, res, next) => {
       return res.status(404).json({ message: 'Scenario not found' });
     }
 
-    const opponent = await User.findById(opponentId);
-    if (!opponent) {
-      return res.status(404).json({ message: 'Opponent not found' });
+    let opponent;
+    if (opponentId) {
+      opponent = await User.findById(opponentId);
+      if (!opponent) {
+        return res.status(404).json({ message: 'Opponent not found' });
+      }
     }
 
     const player1 = await User.findById(req.userId);
 
-    const match = new Match({
+    const matchData = {
       player1: {
         userId: req.userId,
         username: player1.username,
-        finalEquity: 100000,
-      },
-      player2: {
-        userId: opponentId,
-        username: opponent.username,
         finalEquity: 100000,
       },
       stockScenario: scenarioId,
       stockTicker: scenario.ticker,
       stockDate: scenario.startDate,
       status: 'IN_PROGRESS',
-    });
+    };
+
+    if (opponent) {
+      matchData.player2 = {
+        userId: opponentId,
+        username: opponent.username,
+        finalEquity: 100000,
+      };
+    }
+
+    const match = new Match(matchData);
 
     await match.save();
 

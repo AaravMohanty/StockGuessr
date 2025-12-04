@@ -149,16 +149,25 @@ const sampleScenarios = [
 function generateCandles(startDate, endDate, startPrice, endPrice) {
   const candles = [];
   const dayCount = Math.floor((endDate - startDate) / (1000 * 60 * 60 * 24));
-  const priceChange = (endPrice - startPrice) / dayCount;
+  // Calculate daily drift to reach endPrice
+  const totalReturn = (endPrice - startPrice) / startPrice;
+  const dailyDrift = totalReturn / dayCount;
+  const volatility = 0.02; // 2% daily volatility
+
+  let currentPrice = startPrice;
 
   for (let i = 0; i < dayCount; i++) {
     const date = new Date(startDate);
     date.setDate(date.getDate() + i);
 
-    const open = startPrice + priceChange * i + (Math.random() - 0.5) * 5;
-    const close = open + (Math.random() - 0.5) * 3;
-    const high = Math.max(open, close) + Math.random() * 2;
-    const low = Math.min(open, close) - Math.random() * 2;
+    // Skip weekends
+    if (date.getDay() === 0 || date.getDay() === 6) continue;
+
+    const changePercent = dailyDrift + (Math.random() - 0.5) * volatility * 2;
+    const open = currentPrice;
+    const close = currentPrice * (1 + changePercent);
+    const high = Math.max(open, close) * (1 + Math.random() * 0.01);
+    const low = Math.min(open, close) * (1 - Math.random() * 0.01);
     const volume = Math.floor(Math.random() * 50000000) + 10000000;
 
     candles.push({
@@ -169,6 +178,8 @@ function generateCandles(startDate, endDate, startPrice, endPrice) {
       low: parseFloat(low.toFixed(2)),
       volume,
     });
+
+    currentPrice = close;
   }
 
   return candles;

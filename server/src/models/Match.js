@@ -9,7 +9,10 @@ const tradeSchema = new mongoose.Schema({
   price: Number,
   shares: Number,
   pnl: Number,
-  timestamp: Date,
+  timestamp: {
+    type: Date,
+    default: Date.now,
+  },
 });
 
 const matchSchema = new mongoose.Schema(
@@ -35,7 +38,6 @@ const matchSchema = new mongoose.Schema(
       userId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: true,
       },
       username: String,
       finalPnL: {

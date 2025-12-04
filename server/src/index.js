@@ -30,6 +30,12 @@ app.use(express.json());
 // Connect to MongoDB
 connectDB();
 
+// Request logging middleware
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.path}`);
+  next();
+});
+
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/matches', matchRoutes);

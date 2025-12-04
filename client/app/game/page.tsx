@@ -1,13 +1,16 @@
+
 "use client";
 
-import { motion } from "framer-motion";
-import { ArrowLeft, Play, Pause, TrendingUp, TrendingDown } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { ArrowLeft, Play, TrendingUp, TrendingDown, Clock, DollarSign, BarChart2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { scenariosAPI, matchesAPI } from "@/lib/api";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ComposedChart, Bar } from "recharts";
+import GameTimer from "@/components/GameTimer";
+import ShareInput from "@/components/ShareInput";
+import GameChart from "@/components/GameChart";
 
 interface Candle {
   date: string;
@@ -31,6 +34,9 @@ interface Scenario {
   gameCandles: Candle[];
   news: News[];
   description: string;
+  difficulty: string;
+  startDate: string;
+  endDate: string;
 }
 
 interface Trade {
@@ -39,22 +45,35 @@ interface Trade {
   price: number;
   shares?: number;
   pnl?: number;
+  timestamp: Date;
 }
+
+type GamePhase = "matchmaking" | "ready" | "playing" | "completed" | "error";
+type RoundPhase = "reveal" | "decision";
+
+const ROUND_DURATION = 12; // Total seconds per week
+const DECISION_DURATION = 7; // Seconds for decision
 
 export default function GamePage() {
   const router = useRouter();
   const { user, isAuthenticated, loading } = useAuth();
+
+  // Game State
   const [scenario, setScenario] = useState<Scenario | null>(null);
-  const [gameState, setGameState] = useState("matchmaking");
+  const [gameState, setGameState] = useState<GamePhase>("matchmaking");
   const [currentWeek, setCurrentWeek] = useState(0);
-  const [playerEquity, setPlayerEquity] = useState(100000);
-  const [position, setPosition] = useState<any>(null);
-  const [trades, setTrades] = useState<Trade[]>([]);
-  const [opponentEquity, setOpponentEquity] = useState(100000);
-  const [opponentTrades, setOpponentTrades] = useState<Trade[]>([]);
+  const [roundPhase, setRoundPhase] = useState<RoundPhase>("reveal");
   const [matchId, setMatchId] = useState<string | null>(null);
-  const [chartData, setChartData] = useState<any[]>([]);
+
+  // Trading State
+  const [playerEquity, setPlayerEquity] = useState(100000);
+  const [position, setPosition] = useState<{ shares: number; entryPrice: number; entryWeek: number } | null>(null);
+  const [trades, setTrades] = useState<Trade[]>([]);
+  const [selectedShares, setSelectedShares] = useState(0);
+
+  // UI State
   const [isLoadingScenario, setIsLoadingScenario] = useState(true);
+  const [showNews, setShowNews] = useState(false);
 
   // Fetch scenario
   useEffect(() => {
@@ -70,7 +89,6 @@ export default function GamePage() {
       setIsLoadingScenario(true);
       const response = await scenariosAPI.getRandomScenario();
       setScenario(response.data);
-      prepareChartData(response.data);
       setGameState("ready");
     } catch (error) {
       console.error("Failed to fetch scenario:", error);
@@ -80,357 +98,401 @@ export default function GamePage() {
     }
   };
 
-  const prepareChartData = (scen: Scenario) => {
-    const combined = [...(scen.contextCandles || []), ...(scen.gameCandles || [])];
-    const data = combined.map((candle) => ({
-      date: new Date(candle.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-      open: candle.open,
-      close: candle.close,
-      high: candle.high,
-      low: candle.low,
-      volume: candle.volume,
-      price: candle.close,
-    }));
-    setChartData(data);
+  const startGame = async () => {
+    if (!scenario || !user) return;
+
+    try {
+      // Create match on backend
+      const matchRes = await matchesAPI.createMatch(scenario._id);
+      setMatchId(matchRes.data._id);
+
+      setGameState("playing");
+      setCurrentWeek(0);
+      setRoundPhase("reveal");
+
+      // Auto-start first round logic
+      startRound();
+    } catch (error) {
+      console.error("Failed to start match:", error);
+    }
   };
 
-  const startGame = () => {
-    setGameState("playing");
-    setCurrentWeek(0);
+  const startRound = () => {
+    setRoundPhase("reveal");
+    setShowNews(true);
+
+    // Switch to decision phase after reveal
+    setTimeout(() => {
+      setRoundPhase("decision");
+    }, (ROUND_DURATION - DECISION_DURATION) * 1000);
   };
 
-  const handleTrade = async (action: "BUY" | "SELL" | "HOLD") => {
+  const handleRoundComplete = () => {
+    // If no action taken, treat as HOLD
+    if (roundPhase === "decision") {
+      handleTrade("HOLD");
+    }
+  };
+
+  const handleTrade = (action: "BUY" | "SELL" | "HOLD") => {
     if (!scenario) return;
 
     const gameCandle = scenario.gameCandles[currentWeek];
-    if (!gameCandle) return;
+    const price = gameCandle.close;
 
-    const newTrade: Trade = {
+    let newTrade: Trade = {
       week: currentWeek,
       action,
-      price: gameCandle.close,
+      price,
+      timestamp: new Date(),
     };
 
     let newEquity = playerEquity;
 
-    if (action === "BUY" && !position) {
-      const sharesBought = Math.floor(playerEquity / gameCandle.close);
-      newTrade.shares = sharesBought;
-      newEquity = playerEquity - sharesBought * gameCandle.close;
-      setPosition({
-        shares: sharesBought,
-        entryPrice: gameCandle.close,
-        entryWeek: currentWeek,
-      });
+    if (action === "BUY") {
+      if (selectedShares > 0) {
+        const cost = selectedShares * price;
+        if (cost <= playerEquity) {
+          newEquity -= cost;
+          setPosition(prev => ({
+            shares: (prev?.shares || 0) + selectedShares,
+            entryPrice: prev ? ((prev.shares * prev.entryPrice) + cost) / (prev.shares + selectedShares) : price,
+            entryWeek: prev ? prev.entryWeek : currentWeek,
+          }));
+          newTrade.shares = selectedShares;
+        }
+      }
     } else if (action === "SELL" && position) {
-      const proceeds = position.shares * gameCandle.close;
-      newTrade.pnl = proceeds - position.shares * position.entryPrice;
-      newEquity = playerEquity + newTrade.pnl;
+      const proceeds = position.shares * price;
+      const costBasis = position.shares * position.entryPrice;
+      newTrade.pnl = proceeds - costBasis;
+      newTrade.shares = position.shares;
+      newEquity += proceeds;
       setPosition(null);
     }
 
     setTrades([...trades, newTrade]);
     setPlayerEquity(newEquity);
+    setSelectedShares(0); // Reset input
 
-    // Advance week
+    // Advance to next week or end game
     if (currentWeek < 3) {
-      setCurrentWeek(currentWeek + 1);
+      setCurrentWeek(prev => prev + 1);
+      startRound();
     } else {
-      endGame();
+      endGame(newEquity, position);
     }
   };
 
-  const endGame = async () => {
-    if (!user || !scenario || !matchId) return;
+  const endGame = async (finalEquity: number, finalPos: any) => {
+    if (!scenario || !matchId) return;
 
-    // Calculate final equity
-    let finalEquity = playerEquity;
-    if (position) {
-      const lastCandle = scenario.gameCandles[3];
-      const proceeds = position.shares * lastCandle.close;
-      finalEquity = playerEquity + (proceeds - position.shares * position.entryPrice);
+    // Auto-close position at end
+    let calculatedEquity = finalEquity;
+    if (finalPos) {
+      const lastPrice = scenario.gameCandles[3].close;
+      const proceeds = finalPos.shares * lastPrice;
+      calculatedEquity += proceeds;
+
+      // Record implicit sell
+      const closeTrade: Trade = {
+        week: 3,
+        action: "SELL",
+        price: lastPrice,
+        shares: finalPos.shares,
+        pnl: proceeds - (finalPos.shares * finalPos.entryPrice),
+        timestamp: new Date(),
+      };
+      setTrades(prev => [...prev, closeTrade]);
     }
+
+    setPlayerEquity(calculatedEquity);
+    setGameState("completed");
 
     try {
       await matchesAPI.updateMatch(matchId, {
-        player1FinalEquity: finalEquity,
-        player2FinalEquity: opponentEquity,
+        player1FinalEquity: calculatedEquity,
         player1Trades: trades,
-        player2Trades: opponentTrades,
+        status: "completed"
       });
-      setGameState("completed");
     } catch (error) {
-      console.error("Failed to end game:", error);
+      console.error("Failed to save match results:", error);
     }
   };
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-black flex items-center justify-center">
-        <div className="animate-spin">
-          <div className="w-12 h-12 border-4 border-purple-500/30 border-t-purple-500 rounded-full" />
-        </div>
-      </div>
-    );
-  }
+  // Chart Data Preparation
 
-  if (!isAuthenticated) {
-    return null;
-  }
 
-  // Loading state
-  if (isLoadingScenario || !scenario) {
+  if (loading || isLoadingScenario || !scenario) {
     return (
       <div className="min-h-screen bg-black flex flex-col items-center justify-center">
         <div className="animate-spin mb-4">
           <div className="w-12 h-12 border-4 border-purple-500/30 border-t-purple-500 rounded-full" />
         </div>
-        <p className="text-gray-400">Finding the perfect trading scenario...</p>
+        <p className="text-gray-400">Loading market data...</p>
       </div>
     );
   }
 
-  // Ready state
+  // --- READY STATE ---
   if (gameState === "ready") {
     return (
-      <div className="min-h-screen bg-black flex flex-col items-center justify-center px-6">
-        <div className="fixed inset-0 z-0 pointer-events-none">
-          <motion.div
-            className="absolute -top-40 -right-40 w-80 h-80 bg-purple-600/20 rounded-full blur-3xl"
-            animate={{ scale: [1, 1.2, 1] }}
-            transition={{ duration: 8, repeat: Infinity }}
-          />
-        </div>
+      <div className="min-h-screen bg-black flex flex-col items-center justify-center px-6 relative overflow-hidden">
+        {/* Background Effects */}
+        <div className="absolute inset-0 bg-[url('/grid.svg')] opacity-10" />
+        <div className="absolute w-96 h-96 bg-purple-600/20 rounded-full blur-3xl -top-20 -left-20 animate-pulse" />
 
         <motion.div
-          className="relative z-10 text-center max-w-2xl"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
+          className="z-10 text-center max-w-3xl"
         >
-          <h1 className="text-5xl font-bold mb-4">Ready to Trade?</h1>
-          <p className="text-gray-400 text-lg mb-8">
-            You'll trade {scenario.ticker} with $100,000 starting capital. 4 weeks of action, real-time market moves, and news catalysts await.
-          </p>
+          <h1 className="text-6xl font-bold mb-6 bg-clip-text text-transparent bg-gradient-to-r from-purple-400 to-pink-600">
+            Market Challenge
+          </h1>
+
+          <div className="grid grid-cols-3 gap-6 mb-12">
+            <div className="p-6 rounded-2xl bg-white/5 border border-white/10 backdrop-blur">
+              <BarChart2 className="w-8 h-8 text-purple-400 mx-auto mb-3" />
+              <h3 className="text-lg font-bold">3 Months Context</h3>
+              <p className="text-sm text-gray-400">Analyze the trend before you trade</p>
+            </div>
+            <div className="p-6 rounded-2xl bg-white/5 border border-white/10 backdrop-blur">
+              <Clock className="w-8 h-8 text-blue-400 mx-auto mb-3" />
+              <h3 className="text-lg font-bold">4 Weeks</h3>
+              <p className="text-sm text-gray-400">Make quick decisions each week</p>
+            </div>
+            <div className="p-6 rounded-2xl bg-white/5 border border-white/10 backdrop-blur">
+              <DollarSign className="w-8 h-8 text-green-400 mx-auto mb-3" />
+              <h3 className="text-lg font-bold">$100k Starting</h3>
+              <p className="text-sm text-gray-400">Grow your portfolio to win</p>
+            </div>
+          </div>
 
           <motion.button
             onClick={startGame}
-            className="px-12 py-4 rounded-lg bg-gradient-primary text-white font-bold text-lg hover:shadow-2xl glow-primary transition-all duration-300 flex items-center gap-3 mx-auto mb-8"
             whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.98 }}
+            whileTap={{ scale: 0.95 }}
+            className="px-12 py-5 rounded-full bg-white text-black font-bold text-xl hover:shadow-[0_0_40px_rgba(255,255,255,0.3)] transition-all flex items-center gap-3 mx-auto"
           >
-            <Play className="w-6 h-6" />
-            Start Trading
+            <Play className="w-6 h-6 fill-black" />
+            Start Match
           </motion.button>
-
-          <p className="text-gray-500 text-sm">Stock: {scenario.ticker} | Difficulty: {scenario.difficulty}</p>
         </motion.div>
       </div>
     );
   }
 
-  // Playing state
+  // --- PLAYING STATE ---
   if (gameState === "playing") {
     const currentCandle = scenario.gameCandles[currentWeek];
-    const newsForWeek = scenario.news.filter((n) => n.week === currentWeek);
-    const contextStartIndex = Math.max(0, scenario.contextCandles.length - 20);
-    const displayChartData = [
-      ...scenario.contextCandles.slice(contextStartIndex),
-      ...scenario.gameCandles.slice(0, currentWeek + 1),
-    ].map((c) => ({
-      date: new Date(c.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-      price: c.close,
-      volume: c.volume,
-    }));
+    const news = scenario.news.find(n => n.week === currentWeek + 1); // Week is 1-indexed in news
 
     return (
-      <div className="min-h-screen bg-black text-white overflow-hidden">
-        {/* Header */}
-        <div className="border-b border-white/10 backdrop-blur-md sticky top-0 z-40">
-          <div className="max-w-7xl mx-auto px-6 py-4 flex justify-between items-center">
-            <Link href="/dashboard">
-              <motion.button
-                className="flex items-center gap-2 text-gray-400 hover:text-white transition"
-                whileHover={{ scale: 1.05 }}
-              >
-                <ArrowLeft className="w-5 h-5" />
-                Back
-              </motion.button>
-            </Link>
-            <div className="text-center">
-              <p className="text-sm text-gray-400">Week {currentWeek + 1} of 4</p>
-              <h2 className="text-2xl font-bold">{scenario.ticker}</h2>
+      <div className="min-h-screen bg-black text-white flex flex-col">
+        {/* Top Bar */}
+        <header className="h-16 border-b border-white/10 flex items-center justify-between px-6 bg-black/50 backdrop-blur sticky top-0 z-50">
+          <div className="flex items-center gap-4">
+            <div className="px-3 py-1 rounded bg-purple-500/20 text-purple-300 text-sm font-bold">
+              Week {currentWeek + 1} / 4
+            </div>
+            {roundPhase === "decision" && (
+              <div className="w-64">
+                <GameTimer
+                  duration={DECISION_DURATION}
+                  isActive={true}
+                  onComplete={handleRoundComplete}
+                />
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center gap-8">
+            <div className="text-right">
+              <p className="text-xs text-gray-400 uppercase tracking-wider">Equity</p>
+              <p className="text-2xl font-mono font-bold text-green-400">
+                ${(playerEquity + (position ? position.shares * currentCandle.close : 0)).toLocaleString()}
+              </p>
             </div>
             <div className="text-right">
-              <p className="text-sm text-gray-400">Your Equity</p>
-              <p className="text-2xl font-bold text-green-400">${playerEquity.toFixed(0)}</p>
+              <p className="text-xs text-gray-400 uppercase tracking-wider">Cash</p>
+              <p className="text-xl font-mono text-gray-300">${playerEquity.toLocaleString()}</p>
             </div>
           </div>
-        </div>
+        </header>
 
-        {/* Main content */}
-        <div className="relative z-10 max-w-7xl mx-auto px-6 py-8">
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            {/* Chart - Left side */}
-            <motion.div
-              className="lg:col-span-2 glassmorphism p-6 rounded-2xl border border-white/10"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-            >
-              <h3 className="text-lg font-bold mb-4">Stock Chart</h3>
-              {displayChartData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={300}>
-                  <ComposedChart data={displayChartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-                    <XAxis dataKey="date" stroke="rgba(255,255,255,0.5)" style={{ fontSize: "12px" }} />
-                    <YAxis stroke="rgba(255,255,255,0.5)" style={{ fontSize: "12px" }} />
-                    <Tooltip
-                      contentStyle={{ backgroundColor: "rgba(0,0,0,0.8)", border: "1px solid rgba(255,255,255,0.2)" }}
-                      formatter={(value) => `$${value.toFixed(2)}`}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="price"
-                      stroke="#a78bfa"
-                      strokeWidth={2}
-                      dot={false}
-                      isAnimationActive={false}
-                    />
-                    <Bar dataKey="volume" fill="rgba(168,107,250,0.2)" yAxisId="right" />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              ) : (
-                <p className="text-gray-400 text-center py-12">Loading chart...</p>
-              )}
-            </motion.div>
+        <main className="flex-1 flex overflow-hidden">
+          {/* Chart Area */}
+          <div className="flex-1 p-6 relative flex flex-col">
+            <div className="flex-1 min-h-[400px] flex flex-col">
+              <GameChart
+                contextCandles={scenario.contextCandles}
+                gameCandles={scenario.gameCandles}
+                currentWeek={currentWeek}
+                gameState={gameState}
+              />
+            </div>
 
-            {/* Controls - Right side */}
-            <motion.div
-              className="glassmorphism p-6 rounded-2xl border border-white/10 flex flex-col"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-            >
-              <h3 className="text-lg font-bold mb-6">Trading Actions</h3>
-
-              <div className="mb-6 p-4 rounded-lg bg-white/5 border border-white/10">
-                <p className="text-sm text-gray-400 mb-2">Current Price</p>
-                <p className="text-3xl font-bold text-gradient">${currentCandle?.close.toFixed(2)}</p>
-              </div>
-
-              {position && (
+            {/* News Overlay */}
+            <AnimatePresence>
+              {showNews && news && (
                 <motion.div
-                  className="mb-6 p-4 rounded-lg bg-green-500/10 border border-green-500/50"
-                  initial={{ opacity: 0, y: -10 }}
-                  animate={{ opacity: 1, y: 0 }}
+                  initial={{ y: 50, opacity: 0 }}
+                  animate={{ y: 0, opacity: 1 }}
+                  exit={{ y: 50, opacity: 0 }}
+                  className="absolute bottom-8 left-8 right-8 bg-white/10 backdrop-blur-md border border-white/20 p-6 rounded-xl max-w-2xl mx-auto"
                 >
-                  <p className="text-sm text-gray-400 mb-1">Position</p>
-                  <p className="text-lg font-bold text-green-400">{position.shares} shares @ ${position.entryPrice.toFixed(2)}</p>
-                  <p className="text-sm text-green-400 mt-1">Entry Week: {position.entryWeek + 1}</p>
+                  <div className="flex items-start gap-4">
+                    <div className="p-3 rounded-full bg-blue-500/20 text-blue-400">
+                      <BarChart2 size={24} />
+                    </div>
+                    <div>
+                      <h4 className="text-sm text-blue-300 font-bold mb-1 uppercase tracking-wider">Breaking News</h4>
+                      <p className="text-xl font-medium leading-relaxed">{news.headline}</p>
+                      <p className="text-sm text-gray-400 mt-2">{new Date(news.date).toLocaleDateString()}</p>
+                    </div>
+                  </div>
                 </motion.div>
               )}
-
-              <div className="space-y-3 flex-1 flex flex-col justify-center">
-                <motion.button
-                  onClick={() => handleTrade("BUY")}
-                  disabled={position !== null}
-                  className="w-full py-3 rounded-lg bg-gradient-to-r from-green-500 to-emerald-600 text-white font-bold hover:shadow-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                >
-                  <TrendingUp className="w-5 h-5" />
-                  Buy (Long)
-                </motion.button>
-
-                <motion.button
-                  onClick={() => handleTrade("HOLD")}
-                  className="w-full py-3 rounded-lg bg-gradient-to-r from-blue-500 to-cyan-600 text-white font-bold hover:shadow-lg transition flex items-center justify-center gap-2"
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                >
-                  <Pause className="w-5 h-5" />
-                  Hold
-                </motion.button>
-
-                <motion.button
-                  onClick={() => handleTrade("SELL")}
-                  disabled={position === null}
-                  className="w-full py-3 rounded-lg bg-gradient-to-r from-red-500 to-pink-600 text-white font-bold hover:shadow-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                >
-                  <TrendingDown className="w-5 h-5" />
-                  Sell (Close)
-                </motion.button>
-              </div>
-            </motion.div>
+            </AnimatePresence>
           </div>
 
-          {/* News Section */}
-          {newsForWeek.length > 0 && (
-            <motion.div
-              className="mt-8 glassmorphism p-6 rounded-2xl border border-white/10"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-            >
-              <h3 className="text-lg font-bold mb-4">📰 Market News</h3>
-              <div className="space-y-3">
-                {newsForWeek.map((news, idx) => (
-                  <motion.div
-                    key={idx}
-                    className="p-4 rounded-lg bg-white/5 border border-white/10"
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: idx * 0.1 }}
-                  >
-                    <p className="text-gray-300">{news.headline}</p>
-                  </motion.div>
-                ))}
+          {/* Sidebar Controls */}
+          <div className="w-96 border-l border-white/10 bg-black/20 backdrop-blur p-6 flex flex-col gap-6">
+            <div className="p-4 rounded-xl bg-white/5 border border-white/10">
+              <p className="text-sm text-gray-400 mb-1">Current Price</p>
+              <p className="text-4xl font-bold text-white">${currentCandle.close.toFixed(2)}</p>
+              <div className={`flex items - center gap - 2 mt - 2 text - sm ${currentCandle.close >= currentCandle.open ? 'text-green-400' : 'text-red-400'} `}>
+                {currentCandle.close >= currentCandle.open ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
+                {((currentCandle.close - currentCandle.open) / currentCandle.open * 100).toFixed(2)}%
               </div>
-            </motion.div>
-          )}
-        </div>
+            </div>
+
+            {position && (
+              <div className="p-4 rounded-xl bg-purple-500/10 border border-purple-500/30">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-purple-300 font-bold">Current Position</span>
+                  <span className="text-xs bg-purple-500/20 text-purple-300 px-2 py-1 rounded">LONG</span>
+                </div>
+                <div className="flex justify-between text-sm mb-1">
+                  <span className="text-gray-400">Shares</span>
+                  <span className="text-white">{position.shares}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-400">Avg Entry</span>
+                  <span className="text-white">${position.entryPrice.toFixed(2)}</span>
+                </div>
+              </div>
+            )}
+
+            <div className="flex-1 flex flex-col justify-end gap-4">
+              <ShareInput
+                price={currentCandle.close}
+                maxCapital={playerEquity}
+                onChange={setSelectedShares}
+                disabled={roundPhase !== "decision"}
+              />
+
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => handleTrade("BUY")}
+                  disabled={roundPhase !== "decision" || selectedShares === 0}
+                  className="py-4 rounded-xl bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:hover:bg-green-600 text-white font-bold transition flex flex-col items-center gap-1"
+                >
+                  <span className="text-lg">BUY</span>
+                  <span className="text-xs opacity-75 font-normal">Long</span>
+                </button>
+
+                <button
+                  onClick={() => handleTrade("SELL")}
+                  disabled={roundPhase !== "decision" || !position}
+                  className="py-4 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:hover:bg-red-600 text-white font-bold transition flex flex-col items-center gap-1"
+                >
+                  <span className="text-lg">SELL</span>
+                  <span className="text-xs opacity-75 font-normal">Close</span>
+                </button>
+              </div>
+
+              <button
+                onClick={() => handleTrade("HOLD")}
+                disabled={roundPhase !== "decision"}
+                className="w-full py-3 rounded-xl bg-white/10 hover:bg-white/20 disabled:opacity-50 text-gray-300 font-medium transition"
+              >
+                DO NOTHING (HOLD)
+              </button>
+            </div>
+          </div>
+        </main>
       </div>
     );
   }
 
-  // Completed state
+  // --- COMPLETED STATE ---
   if (gameState === "completed") {
-    const playerFinalEquity = playerEquity;
-    const playerPnL = playerFinalEquity - 100000;
+    const totalReturn = ((playerEquity - 100000) / 100000) * 100;
 
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center px-6">
-        <motion.div
-          className="text-center max-w-2xl"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-        >
-          <h1 className="text-5xl font-bold mb-4">Game Complete!</h1>
-          <p className="text-gray-400 text-lg mb-8">
-            Stock: {scenario.ticker}
-          </p>
+      <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-6 relative overflow-hidden">
+        <div className="absolute inset-0 bg-[url('/grid.svg')] opacity-5" />
 
-          <div className="grid grid-cols-2 gap-6 mb-8">
-            <div className="glassmorphism p-6 rounded-xl border border-white/10">
-              <p className="text-gray-400 text-sm mb-2">Your Final Equity</p>
-              <p className="text-3xl font-bold text-gradient">${playerFinalEquity.toFixed(0)}</p>
+        <motion.div
+          initial={{ scale: 0.9, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          className="z-10 max-w-4xl w-full bg-[#111] border border-white/10 rounded-3xl overflow-hidden shadow-2xl"
+        >
+          <div className="p-8 border-b border-white/10 text-center">
+            <h2 className="text-gray-400 uppercase tracking-widest text-sm mb-2">The Stock Was</h2>
+            <h1 className="text-6xl font-black text-white mb-2">{scenario.ticker}</h1>
+            <p className="text-xl text-purple-400">
+              {new Date(scenario.startDate).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
+              {' - '}
+              {new Date(scenario.endDate).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 divide-x divide-white/10">
+            <div className="p-8 flex flex-col justify-center items-center">
+              <p className="text-gray-400 mb-2">Final Portfolio Value</p>
+              <p className="text-5xl font-bold text-white mb-4">${playerEquity.toLocaleString()}</p>
+              <div className={`px - 4 py - 2 rounded - full text - lg font - bold ${totalReturn >= 0 ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'} `}>
+                {totalReturn >= 0 ? '+' : ''}{totalReturn.toFixed(2)}% Return
+              </div>
             </div>
-            <div className={`glassmorphism p-6 rounded-xl border ${playerPnL >= 0 ? 'border-green-500/50' : 'border-red-500/50'}`}>
-              <p className="text-gray-400 text-sm mb-2">Profit/Loss</p>
-              <p className={`text-3xl font-bold ${playerPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                ${playerPnL.toFixed(0)}
-              </p>
+
+            <div className="p-8">
+              <h3 className="text-lg font-bold mb-4 text-gray-300">Performance Summary</h3>
+              <div className="space-y-4">
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Total Trades</span>
+                  <span>{trades.length}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Best Trade</span>
+                  <span className="text-green-400">
+                    +${Math.max(...trades.map(t => t.pnl || 0), 0).toLocaleString()}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Difficulty</span>
+                  <span className="capitalize">{scenario.difficulty.toLowerCase()}</span>
+                </div>
+              </div>
             </div>
           </div>
 
-          <Link href="/dashboard">
-            <motion.button
-              className="px-8 py-4 rounded-lg bg-gradient-primary text-white font-bold text-lg hover:shadow-2xl glow-primary transition-all"
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.98 }}
+          <div className="p-8 bg-white/5 border-t border-white/10 flex justify-center gap-4">
+            <Link href="/dashboard">
+              <button className="px-8 py-3 rounded-xl bg-white/10 hover:bg-white/20 transition font-bold">
+                Dashboard
+              </button>
+            </Link>
+            <button
+              onClick={() => window.location.reload()}
+              className="px-8 py-3 rounded-xl bg-purple-600 hover:bg-purple-500 transition font-bold"
             >
-              Back to Dashboard
-            </motion.button>
-          </Link>
+              Play Again
+            </button>
+          </div>
         </motion.div>
       </div>
     );
@@ -438,3 +500,4 @@ export default function GamePage() {
 
   return null;
 }
+

@@ -1,6 +1,8 @@
 import axios from 'axios';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+const API_BASE_URL = 'http://localhost:5000/api';
+
+console.log('API_BASE_URL:', API_BASE_URL);
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -20,6 +22,22 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// Log responses
+api.interceptors.response.use(
+  (response) => {
+    console.log('Response:', response.status, response.config.url);
+    return response;
+  },
+  (error) => {
+    console.error('Response Error:', error.message);
+    if (error.response) {
+      console.error('Error Status:', error.response.status);
+      console.error('Error Data:', error.response.data);
+    }
+    return Promise.reject(error);
+  }
+);
+
 // Auth endpoints
 export const authAPI = {
   register: (email: string, username: string, password: string) =>
@@ -38,7 +56,7 @@ export const scenariosAPI = {
 
 // Matches endpoints
 export const matchesAPI = {
-  createMatch: (scenarioId: string, opponentId: string) =>
+  createMatch: (scenarioId: string, opponentId?: string) =>
     api.post('/matches', { scenarioId, opponentId }),
   getMatch: (id: string) => api.get(`/matches/${id}`),
   updateMatch: (id: string, data: any) =>

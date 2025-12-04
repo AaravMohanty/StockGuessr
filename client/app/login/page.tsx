@@ -6,9 +6,11 @@ import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { authAPI } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 
 export default function LoginPage() {
   const router = useRouter();
+  const { refetchUser } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -29,14 +31,38 @@ export default function LoginPage() {
     setIsLoading(true);
 
     try {
+      console.log("Attempting login with:", email);
       const response = await authAPI.login(email, password);
-      localStorage.setItem("token", response.data.token);
-      router.push("/dashboard");
-    } catch (error: any) {
-      if (error.response?.data?.message) {
-        setError(error.response.data.message);
+      console.log("Login response:", response);
+
+      if (response.data && response.data.token) {
+        console.log("Token received, saving and redirecting...");
+        localStorage.setItem("token", response.data.token);
+
+        // Update auth context
+        await refetchUser();
+
+        router.push("/dashboard");
       } else {
-        setError("Login failed. Please try again.");
+        console.error("Login successful but no token in response:", response.data);
+        setError("Login failed: No token received");
+      }
+    } catch (error: any) {
+      console.error("Login error object:", error);
+      if (error.response) {
+        console.error("Error response data:", error.response.data);
+        console.error("Error response status:", error.response.status);
+        if (error.response.data?.message) {
+          setError(`Server Error: ${error.response.data.message}`);
+        } else {
+          setError(`Login failed with status: ${error.response.status}`);
+        }
+      } else if (error.request) {
+        console.error("No response received:", error.request);
+        setError("Network Error: No response from server. Check if backend is running.");
+      } else {
+        console.error("Error setting up request:", error.message);
+        setError(`Application Error: ${error.message}`);
       }
     } finally {
       setIsLoading(false);
