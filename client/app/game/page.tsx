@@ -66,7 +66,7 @@ export default function GamePage() {
   const [matchId, setMatchId] = useState<string | null>(null);
 
   // Trading State
-  const [playerEquity, setPlayerEquity] = useState(100000);
+  const [availableCash, setAvailableCash] = useState(100000);
   const [position, setPosition] = useState<{ shares: number; entryPrice: number; entryWeek: number } | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [selectedShares, setSelectedShares] = useState(0);
@@ -147,32 +147,126 @@ export default function GamePage() {
       timestamp: new Date(),
     };
 
-    let newEquity = playerEquity;
+    let newCash = availableCash;
+    let newPosition = position ? { ...position } : null;
 
     if (action === "BUY") {
       if (selectedShares > 0) {
         const cost = selectedShares * price;
-        if (cost <= playerEquity) {
-          newEquity -= cost;
-          setPosition(prev => ({
-            shares: (prev?.shares || 0) + selectedShares,
-            entryPrice: prev ? ((prev.shares * prev.entryPrice) + cost) / (prev.shares + selectedShares) : price,
-            entryWeek: prev ? prev.entryWeek : currentWeek,
-          }));
+        // Allow buying if we have cash (Long) OR if we are covering a short (reducing negative shares)
+        // Ideally we check margin, but simpler: Can only Open Long if Cash >= Cost.
+        // Covering Short: Always allow if we have the cash (Cost) but wait, covering reduces cash.
+
+        // Simplified Rule: 
+        // 1. If Position >= 0 (Long or Flat): Need Cash >= Cost.
+        // 2. If Position < 0 (Short): We are buying back. Need Cash >= Cost? Yes, usually.
+
+        if (newCash >= cost) {
+          newCash -= cost; // Cash decreases
+
+          if (!newPosition) {
+            // Open Long
+            newPosition = { shares: selectedShares, entryPrice: price, entryWeek: currentWeek };
+          } else {
+            // Add to Long or Cover Short
+            const totalShares = newPosition.shares + selectedShares;
+
+            if (totalShares === 0) {
+              // Closed completely
+              // PnL = (Entry - Exit) * Abs(Shares) -- Wait, let's just calc realized PnL on close
+              // Short PnL: (Entry - BuyPrice) * Abs(OldShares)
+              const pnl = (newPosition.entryPrice - price) * Math.abs(newPosition.shares);
+              newTrade.pnl = pnl;
+              newPosition = null;
+
+              // Note: For shorts, 'entryPrice' was the Sell Price.
+            } else if (newPosition.shares < 0) {
+              // Partial Cover
+              // PnL on the covered portion?
+              // (Entry - Price) * SharesCovered
+              const pnl = (newPosition.entryPrice - price) * selectedShares;
+              newTrade.pnl = pnl;
+
+              newPosition.shares = totalShares;
+              // Entry price stays same for remaining short
+            } else {
+              // Adding to Long
+              newPosition = {
+                shares: totalShares,
+                entryPrice: ((newPosition.shares * newPosition.entryPrice) + cost) / totalShares,
+                entryWeek: newPosition.entryWeek
+              };
+            }
+          }
           newTrade.shares = selectedShares;
+        } else {
+          alert("Not enough cash!"); // Simple feedback
+          return;
         }
       }
-    } else if (action === "SELL" && position) {
-      const proceeds = position.shares * price;
-      const costBasis = position.shares * position.entryPrice;
-      newTrade.pnl = proceeds - costBasis;
-      newTrade.shares = position.shares;
-      newEquity += proceeds;
-      setPosition(null);
+    } else if (action === "SELL") {
+      if (selectedShares > 0) {
+        const proceeds = selectedShares * price;
+        newCash += proceeds; // Cash increases
+
+        if (!newPosition) {
+          // Open Short
+          // Margin Check: Can't short more than 1x Cash?
+          // Current Equity = Cash. Max Short Value = Cash.
+          if (proceeds <= availableCash) {
+            newPosition = { shares: -selectedShares, entryPrice: price, entryWeek: currentWeek };
+          } else {
+            alert("Margin limit reached (1x leverage)");
+            return;
+          }
+        } else {
+          // Add to Short or Sell Long
+          const totalShares = newPosition.shares - selectedShares;
+
+          if (totalShares === 0) {
+            // Closed Long
+            const pnl = (price - newPosition.entryPrice) * newPosition.shares;
+            newTrade.pnl = pnl;
+            newPosition = null;
+          } else if (newPosition.shares > 0) {
+            // Partial Sell Long
+            const pnl = (price - newPosition.entryPrice) * selectedShares;
+            newTrade.pnl = pnl;
+            newPosition.shares = totalShares;
+            // Entry price stays same
+          } else {
+            // Adding to Short
+            // Check margin again?
+            const currentShortValue = Math.abs(newPosition.shares) * price;
+            const newShortValue = currentShortValue + proceeds;
+            // Approx Margin check
+            if (newShortValue <= (newCash - proceeds)) { // Check against old cash base?
+              // Let's use simplified: Total Short Value <= Total Cash
+              // newCash is already inflated by proceeds.
+              // Equity = newCash - newShortValue.
+              // Keep it simple: Open Short Limit
+              newPosition = {
+                shares: totalShares,
+                entryPrice: ((Math.abs(newPosition.shares) * newPosition.entryPrice) + proceeds) / Math.abs(totalShares),
+                entryWeek: newPosition.entryWeek
+              };
+            } else {
+              // Allow for now to avoid blocking mid-game, or implement stricter check later
+              newPosition = {
+                shares: totalShares,
+                entryPrice: ((Math.abs(newPosition.shares) * newPosition.entryPrice) + proceeds) / Math.abs(totalShares),
+                entryWeek: newPosition.entryWeek
+              };
+            }
+          }
+        }
+        newTrade.shares = selectedShares;
+      }
     }
 
     setTrades([...trades, newTrade]);
-    setPlayerEquity(newEquity);
+    setAvailableCash(newCash);
+    setPosition(newPosition);
     setSelectedShares(0); // Reset input
 
     // Advance to next week or end game
@@ -180,7 +274,17 @@ export default function GamePage() {
       setCurrentWeek(prev => prev + 1);
       startRound();
     } else {
-      endGame(newEquity, position);
+      // Calculate Final Equity correctly
+      let finalEquity = newCash;
+      if (newPosition) {
+        // Close position at last price
+        const lastPrice = scenario.gameCandles[3].close;
+        // Equity = Cash + (Shares * Price)
+        // If Long: Cash + (Pos * Price)
+        // If Short: Cash + (Neg * Price) -> Cash - (Pos * Price)
+        finalEquity += newPosition.shares * lastPrice;
+      }
+      endGame(finalEquity, newPosition);
     }
   };
 
@@ -206,7 +310,7 @@ export default function GamePage() {
       setTrades(prev => [...prev, closeTrade]);
     }
 
-    setPlayerEquity(calculatedEquity);
+    setAvailableCash(calculatedEquity);
     setGameState("completed");
 
     try {
@@ -311,12 +415,12 @@ export default function GamePage() {
             <div className="text-right">
               <p className="text-xs text-gray-400 uppercase tracking-wider">Equity</p>
               <p className="text-2xl font-mono font-bold text-green-400">
-                ${(playerEquity + (position ? position.shares * currentCandle.close : 0)).toLocaleString()}
+                ${(availableCash + (position ? position.shares * currentCandle.close : 0)).toLocaleString()}
               </p>
             </div>
             <div className="text-right">
               <p className="text-xs text-gray-400 uppercase tracking-wider">Cash</p>
-              <p className="text-xl font-mono text-gray-300">${playerEquity.toLocaleString()}</p>
+              <p className="text-xl font-mono text-gray-300">${availableCash.toLocaleString()}</p>
             </div>
           </div>
         </header>
@@ -369,17 +473,19 @@ export default function GamePage() {
             </div>
 
             {position && (
-              <div className="p-4 rounded-xl bg-purple-500/10 border border-purple-500/30">
+              <div className={`p-4 rounded-xl border ${position.shares > 0 ? 'bg-purple-500/10 border-purple-500/30' : 'bg-orange-500/10 border-orange-500/30'}`}>
                 <div className="flex justify-between items-center mb-2">
-                  <span className="text-purple-300 font-bold">Current Position</span>
-                  <span className="text-xs bg-purple-500/20 text-purple-300 px-2 py-1 rounded">LONG</span>
+                  <span className={`${position.shares > 0 ? 'text-purple-300' : 'text-orange-300'} font-bold`}>Current Position</span>
+                  <span className={`text-xs px-2 py-1 rounded ${position.shares > 0 ? 'bg-purple-500/20 text-purple-300' : 'bg-orange-500/20 text-orange-300'}`}>
+                    {position.shares > 0 ? 'LONG' : 'SHORT'}
+                  </span>
                 </div>
                 <div className="flex justify-between text-sm mb-1">
                   <span className="text-gray-400">Shares</span>
-                  <span className="text-white">{position.shares}</span>
+                  <span className="text-white">{Math.abs(position.shares)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-gray-400">Avg Entry</span>
+                  <span className="text-gray-400">Avg {position.shares > 0 ? 'Entry' : 'Sold'}</span>
                   <span className="text-white">${position.entryPrice.toFixed(2)}</span>
                 </div>
               </div>
@@ -388,7 +494,7 @@ export default function GamePage() {
             <div className="flex-1 flex flex-col justify-end gap-4">
               <ShareInput
                 price={currentCandle.close}
-                maxCapital={playerEquity}
+                maxCapital={availableCash}
                 onChange={setSelectedShares}
                 disabled={roundPhase !== "decision"}
               />
@@ -399,17 +505,25 @@ export default function GamePage() {
                   disabled={roundPhase !== "decision" || selectedShares === 0}
                   className="py-4 rounded-xl bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:hover:bg-green-600 text-white font-bold transition flex flex-col items-center gap-1"
                 >
-                  <span className="text-lg">BUY</span>
-                  <span className="text-xs opacity-75 font-normal">Long</span>
+                  <span className="text-lg">
+                    {position?.shares && position.shares < 0 ? 'COVER' : 'BUY'}
+                  </span>
+                  <span className="text-xs opacity-75 font-normal">
+                    {position?.shares && position.shares < 0 ? 'Close Short' : 'Long'}
+                  </span>
                 </button>
 
                 <button
                   onClick={() => handleTrade("SELL")}
-                  disabled={roundPhase !== "decision" || !position}
+                  disabled={roundPhase !== "decision" || selectedShares === 0}
                   className="py-4 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:hover:bg-red-600 text-white font-bold transition flex flex-col items-center gap-1"
                 >
-                  <span className="text-lg">SELL</span>
-                  <span className="text-xs opacity-75 font-normal">Close</span>
+                  <span className="text-lg">
+                    {position?.shares && position.shares > 0 ? 'SELL' : 'SHORT'}
+                  </span>
+                  <span className="text-xs opacity-75 font-normal">
+                    {position?.shares && position.shares > 0 ? 'Close Long' : 'Sell to Open'}
+                  </span>
                 </button>
               </div>
 
@@ -429,7 +543,7 @@ export default function GamePage() {
 
   // --- COMPLETED STATE ---
   if (gameState === "completed") {
-    const totalReturn = ((playerEquity - 100000) / 100000) * 100;
+    const totalReturn = ((availableCash - 100000) / 100000) * 100;
 
     return (
       <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-6 relative overflow-hidden">
@@ -453,7 +567,7 @@ export default function GamePage() {
           <div className="grid grid-cols-2 divide-x divide-white/10">
             <div className="p-8 flex flex-col justify-center items-center">
               <p className="text-gray-400 mb-2">Final Portfolio Value</p>
-              <p className="text-5xl font-bold text-white mb-4">${playerEquity.toLocaleString()}</p>
+              <p className="text-5xl font-bold text-white mb-4">${availableCash.toLocaleString()}</p>
               <div className={`px - 4 py - 2 rounded - full text - lg font - bold ${totalReturn >= 0 ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'} `}>
                 {totalReturn >= 0 ? '+' : ''}{totalReturn.toFixed(2)}% Return
               </div>
@@ -468,8 +582,18 @@ export default function GamePage() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-500">Best Trade</span>
-                  <span className="text-green-400">
-                    +${Math.max(...trades.map(t => t.pnl || 0), 0).toLocaleString()}
+                  <span className={(() => {
+                    const pnlTrades = trades.filter(t => typeof t.pnl === 'number');
+                    if (pnlTrades.length === 0) return 'text-gray-400';
+                    const best = Math.max(...pnlTrades.map(t => t.pnl!));
+                    return best >= 0 ? 'text-green-400' : 'text-red-400';
+                  })()}>
+                    {(() => {
+                      const pnlTrades = trades.filter(t => typeof t.pnl === 'number');
+                      if (pnlTrades.length === 0) return 'N/A';
+                      const best = Math.max(...pnlTrades.map(t => t.pnl!));
+                      return (best >= 0 ? '+' : '') + '$' + best.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+                    })()}
                   </span>
                 </div>
                 <div className="flex justify-between">

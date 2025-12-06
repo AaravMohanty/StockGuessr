@@ -46,6 +46,11 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+// Root route
+app.get('/', (req, res) => {
+  res.send('StockGuessr API is running');
+});
+
 // Socket.io
 const activeMatches = new Map();
 
