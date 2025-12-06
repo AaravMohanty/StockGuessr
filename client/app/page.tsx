@@ -1,115 +1,262 @@
 "use client";
 
-import { motion } from "framer-motion";
-import { ArrowRight, TrendingUp, Users, Crown, Lock, Play, Zap, Target, Brain } from "lucide-react";
+import { motion, useMotionValue, useSpring } from "framer-motion";
+import { ArrowRight, TrendingUp, BarChart3, LineChart, DollarSign, Shield, Award, Clock } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 
 // Logo component
 function StockGuessrLogo() {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-3">
       <motion.div
-        className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-500 to-cyan-600 flex items-center justify-center text-white font-black text-sm"
-        whileHover={{ scale: 1.1 }}
+        className="relative"
+        whileHover={{ scale: 1.05 }}
       >
-        $
+        <div className="w-9 h-9 rounded-md bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center">
+          <BarChart3 className="w-5 h-5 text-white" strokeWidth={2.5} />
+        </div>
       </motion.div>
-      <span className="font-black text-lg tracking-tight bg-gradient-to-r from-cyan-400 to-cyan-300 bg-clip-text text-transparent">
-        SG
-      </span>
+      <div className="flex flex-col">
+        <span className="font-bold text-base tracking-tight text-white leading-none">
+          StockGuessr
+        </span>
+        <span className="text-[10px] text-emerald-500 font-medium tracking-wide">
+          COMPETITIVE TRADING
+        </span>
+      </div>
     </div>
   );
 }
 
+// Live ticker component
+function LiveTicker() {
+  const stocks = [
+    { symbol: "AAPL", price: 178.23, change: 2.34, positive: true },
+    { symbol: "TSLA", price: 242.15, change: -1.23, positive: false },
+    { symbol: "GOOGL", price: 141.87, change: 3.45, positive: true },
+    { symbol: "AMZN", price: 176.92, change: 1.89, positive: true },
+    { symbol: "MSFT", price: 425.44, change: -0.56, positive: false },
+    { symbol: "NVDA", price: 495.22, change: 4.21, positive: true },
+    { symbol: "META", price: 512.33, change: 2.15, positive: true },
+    { symbol: "JPM", price: 234.76, change: -0.87, positive: false },
+  ];
+
+  return (
+    <div className="w-full overflow-hidden bg-gradient-to-r from-slate-900/50 via-slate-800/30 to-slate-900/50 border-y border-slate-700/30 backdrop-blur-sm py-3">
+      <motion.div
+        className="flex gap-12 whitespace-nowrap"
+        animate={{ x: [0, -1500] }}
+        transition={{ duration: 40, repeat: Infinity, ease: "linear" }}
+      >
+        {[...stocks, ...stocks, ...stocks].map((stock, idx) => (
+          <div key={idx} className="flex items-center gap-3 text-sm">
+            <span className="text-slate-300 font-semibold tracking-wide">{stock.symbol}</span>
+            <span className="text-slate-400 font-medium">${stock.price}</span>
+            <span className={`font-bold flex items-center gap-1 ${stock.positive ? "text-emerald-400" : "text-red-400"}`}>
+              {stock.positive ? "▲" : "▼"}
+              {stock.positive ? "+" : ""}{stock.change}%
+            </span>
+          </div>
+        ))}
+      </motion.div>
+    </div>
+  );
+}
+
+// Market grid background
+function MarketGrid() {
+  return (
+    <>
+      {/* Subtle grid */}
+      <div className="absolute inset-0 bg-[linear-gradient(rgba(16,185,129,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(16,185,129,0.03)_1px,transparent_1px)] bg-[size:64px_64px] opacity-40" />
+
+      {/* Financial chart lines effect */}
+      <svg className="absolute inset-0 w-full h-full opacity-10" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <pattern id="chart-pattern" x="0" y="0" width="200" height="200" patternUnits="userSpaceOnUse">
+            <path d="M0 100 L50 80 L100 90 L150 60 L200 70" stroke="rgba(16,185,129,0.3)" strokeWidth="2" fill="none" />
+          </pattern>
+        </defs>
+        <rect width="100%" height="100%" fill="url(#chart-pattern)" />
+      </svg>
+    </>
+  );
+}
+
+// Magnetic button component
+function MagneticButton({ children, className, href }: { children: React.ReactNode; className: string; href?: string }) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const x = useMotionValue(0);
+  const y = useMotionValue(0);
+  const springX = useSpring(x, { stiffness: 150, damping: 15 });
+  const springY = useSpring(y, { stiffness: 150, damping: 15 });
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLButtonElement>) => {
+    if (!ref.current) return;
+    const rect = ref.current.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    x.set((e.clientX - centerX) * 0.3);
+    y.set((e.clientY - centerY) * 0.3);
+  };
+
+  const handleMouseLeave = () => {
+    x.set(0);
+    y.set(0);
+  };
+
+  const button = (
+    <motion.button
+      ref={ref}
+      className={className}
+      style={{ x: springX, y: springY }}
+      onMouseMove={handleMouseMove}
+      onMouseLeave={handleMouseLeave}
+      whileTap={{ scale: 0.95 }}
+    >
+      {children}
+    </motion.button>
+  );
+
+  return href ? <Link href={href}>{button}</Link> : button;
+}
+
 export default function LandingPage() {
   const [hoveredFeature, setHoveredFeature] = useState<number | null>(null);
+  const [onlineUsers, setOnlineUsers] = useState(1247);
+  const [prediction, setPrediction] = useState<"up" | "down" | null>(null);
+
+  // Simulate live user count
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setOnlineUsers(prev => prev + Math.floor(Math.random() * 3) - 1);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, []);
 
   const containerVariants = {
     hidden: { opacity: 0 },
     visible: {
       opacity: 1,
-      transition: { staggerChildren: 0.08, delayChildren: 0.15 },
+      transition: { staggerChildren: 0.1, delayChildren: 0.2 },
     },
   };
 
   const itemVariants = {
-    hidden: { opacity: 0, y: 25 },
+    hidden: { opacity: 0, y: 20 },
     visible: {
       opacity: 1,
       y: 0,
-      transition: { duration: 0.6, ease: [0.25, 0.46, 0.45, 0.94] },
+      transition: { duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] },
     },
   };
 
   return (
-    <div className="relative w-full min-h-screen overflow-hidden bg-[#0a0a0a]">
-      {/* Subtle Animated Background */}
+    <div className="relative w-full min-h-screen overflow-hidden bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
+      {/* Professional Financial Background */}
       <div className="fixed inset-0 z-0 pointer-events-none overflow-hidden">
+        <MarketGrid />
+
+        {/* Subtle emerald glow - top right */}
         <motion.div
-          className="absolute -top-96 -right-96 w-[900px] h-[900px] rounded-full"
+          className="absolute top-0 right-0 w-[600px] h-[600px] rounded-full"
           style={{
-            background: "radial-gradient(circle, rgba(0, 230, 197, 0.12) 0%, transparent 70%)",
+            background: "radial-gradient(circle, rgba(16, 185, 129, 0.08) 0%, transparent 70%)",
             filter: "blur(100px)",
           }}
-          animate={{ x: [0, 50, 0], y: [0, 30, 0], scale: [1, 1.1, 1] }}
-          transition={{ duration: 18, repeat: Infinity, ease: "easeInOut" }}
+          animate={{
+            x: [0, 50, 0],
+            y: [0, 30, 0],
+            scale: [1, 1.1, 1],
+          }}
+          transition={{ duration: 20, repeat: Infinity, ease: "easeInOut" }}
         />
 
+        {/* Subtle blue accent - bottom left */}
         <motion.div
-          className="absolute -bottom-96 -left-96 w-[800px] h-[800px] rounded-full"
+          className="absolute -bottom-32 -left-32 w-[500px] h-[500px] rounded-full"
           style={{
-            background: "radial-gradient(circle, rgba(216, 92, 224, 0.08) 0%, transparent 70%)",
+            background: "radial-gradient(circle, rgba(59, 130, 246, 0.06) 0%, transparent 70%)",
             filter: "blur(100px)",
           }}
-          animate={{ x: [0, -40, 0], y: [0, -50, 0], scale: [1, 1.15, 1] }}
-          transition={{ duration: 20, repeat: Infinity, ease: "easeInOut", delay: 2 }}
+          animate={{
+            x: [0, -40, 0],
+            y: [0, -30, 0],
+            scale: [1, 1.15, 1],
+          }}
+          transition={{ duration: 22, repeat: Infinity, ease: "easeInOut", delay: 2 }}
         />
-
-        <div className="absolute inset-0 bg-[linear-gradient(rgba(0,230,197,0.01)_1px,transparent_1px),linear-gradient(90deg,rgba(0,230,197,0.01)_1px,transparent_1px)] bg-[size:100px_100px] opacity-20" />
       </div>
 
       {/* Content */}
       <div className="relative z-10">
+        {/* Live Ticker */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 1, delay: 0.5 }}
+        >
+          <LiveTicker />
+        </motion.div>
+
         {/* Navigation */}
         <motion.nav
-          className="fixed top-0 w-full z-50"
+          className="sticky top-0 w-full z-50"
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.7 }}
         >
-          <div className="absolute inset-0 backdrop-blur-2xl bg-[#0a0a0a]/70 border-b border-white/5" />
+          <div className="absolute inset-0 backdrop-blur-xl bg-slate-950/80 border-b border-slate-800/50" />
           <div className="relative max-w-7xl mx-auto px-8 py-5 flex justify-between items-center">
             <StockGuessrLogo />
+
+            {/* Online users badge */}
             <motion.div
-              className="flex gap-3 items-center"
+              className="absolute left-1/2 -translate-x-1/2 flex items-center gap-2.5 px-4 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 backdrop-blur-sm"
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.5, delay: 0.8 }}
+            >
+              <motion.div
+                className="w-2 h-2 rounded-full bg-emerald-400 shadow-lg shadow-emerald-400/50"
+                animate={{ scale: [1, 1.3, 1], opacity: [1, 0.7, 1] }}
+                transition={{ duration: 2, repeat: Infinity }}
+              />
+              <span className="text-xs font-bold text-emerald-300 tracking-wide">
+                {onlineUsers.toLocaleString()} LIVE TRADERS
+              </span>
+            </motion.div>
+
+            <motion.div
+              className="flex gap-4 items-center"
               initial={{ opacity: 0, x: 30 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.7, delay: 0.1 }}
             >
               <Link href="/login">
                 <motion.button
-                  className="px-6 py-2 text-sm font-medium text-white/60 hover:text-white/90 transition-colors"
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
+                  className="px-6 py-2.5 text-sm font-semibold text-slate-300 hover:text-white transition-colors"
+                  whileHover={{ scale: 1.03 }}
+                  whileTap={{ scale: 0.97 }}
                 >
-                  Login
+                  Sign In
                 </motion.button>
               </Link>
               <Link href="/register">
                 <motion.button
-                  className="px-7 py-2 rounded-lg text-sm font-bold text-white bg-gradient-to-r from-cyan-500 to-cyan-600 hover:from-cyan-400 hover:to-cyan-500 transition-all shadow-lg shadow-cyan-500/25"
-                  whileHover={{ scale: 1.05, y: -2 }}
+                  className="px-8 py-2.5 rounded-lg text-sm font-bold text-white bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 transition-all shadow-lg shadow-emerald-500/25"
+                  whileHover={{ scale: 1.05, y: -1 }}
                   whileTap={{ scale: 0.95 }}
                 >
-                  Play Now
+                  Start Trading
                 </motion.button>
               </Link>
             </motion.div>
           </div>
         </motion.nav>
 
-        {/* Hero Section */}
+        {/* Hero Section - Finance Professional */}
         <section className="min-h-screen w-full pt-32 px-8 flex flex-col justify-center items-center">
           <motion.div
             className="max-w-5xl w-full text-center"
@@ -117,262 +264,290 @@ export default function LandingPage() {
             initial="hidden"
             animate="visible"
           >
-            {/* Badge */}
+            {/* Market status badge */}
             <motion.div
               variants={itemVariants}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-cyan-500/30 bg-cyan-500/5 mb-8"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-slate-800/50 border border-slate-700/50 backdrop-blur-sm mb-8"
             >
-              <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-              <span className="text-sm font-medium text-cyan-200">Live competition platform</span>
+              <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-sm font-semibold text-slate-300 tracking-wide">MARKETS OPEN • LIVE TRADING</span>
             </motion.div>
 
             {/* Main Headline */}
             <motion.h1
               variants={itemVariants}
-              className="text-7xl md:text-8xl font-black mb-6 leading-[1.1] tracking-tight"
+              className="text-6xl md:text-7xl lg:text-8xl font-extrabold mb-8 leading-[1.1] tracking-tight"
             >
-              <span className="text-white block">Trade in Real-Time.</span>
-              <span
-                className="block"
-                style={{
-                  background: "linear-gradient(135deg, #00e6c5 0%, #d85ce0 50%, #00e6c5 100%)",
-                  WebkitBackgroundClip: "text",
-                  WebkitTextFillColor: "transparent",
-                  backgroundClip: "text",
-                }}
-              >
-                Beat Your Rivals.
+              <span className="text-white block">Master the Market.</span>
+              <span className="block bg-gradient-to-r from-emerald-400 via-emerald-500 to-blue-500 bg-clip-text text-transparent">
+                Outperform the Competition.
               </span>
             </motion.h1>
 
             {/* Subtitle */}
             <motion.p
               variants={itemVariants}
-              className="text-lg md:text-xl text-gray-300/80 mb-10 max-w-2xl mx-auto leading-relaxed"
+              className="text-xl md:text-2xl text-slate-400 mb-12 max-w-3xl mx-auto leading-relaxed font-medium"
             >
-              Compete against traders worldwide in skill-based stock prediction matches. Predict price movements faster than your opponent and earn real rewards.
+              Head-to-head stock prediction battles. Real market data.
+              <span className="text-emerald-400"> Real rewards.</span>
             </motion.p>
 
             {/* CTA Buttons */}
-            <motion.div
-              variants={itemVariants}
-              className="flex gap-4 justify-center flex-wrap mb-16"
-            >
+            <motion.div variants={itemVariants} className="flex gap-4 justify-center items-center mb-16">
               <Link href="/register">
                 <motion.button
-                  className="px-10 py-4 rounded-lg text-lg font-bold text-white bg-gradient-to-r from-cyan-500 to-cyan-600 hover:from-cyan-400 hover:to-cyan-500 transition-all shadow-xl shadow-cyan-500/25 flex items-center gap-2"
+                  className="px-10 py-4 rounded-xl text-lg font-bold text-white bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 transition-all shadow-xl shadow-emerald-500/30 flex items-center gap-3"
                   whileHover={{ scale: 1.05, y: -2 }}
                   whileTap={{ scale: 0.95 }}
                 >
-                  <Play className="w-5 h-5 fill-current" />
-                  Start Free
+                  <DollarSign className="w-5 h-5" />
+                  Start Trading Free
+                  <ArrowRight className="w-5 h-5" />
                 </motion.button>
               </Link>
               <motion.button
-                className="px-10 py-4 rounded-lg text-lg font-bold text-cyan-400 border-2 border-cyan-500/40 hover:border-cyan-500/70 hover:bg-cyan-500/5 transition-all"
+                className="px-10 py-4 rounded-xl text-lg font-bold text-slate-300 border-2 border-slate-700 hover:border-slate-600 hover:bg-slate-800/50 transition-all flex items-center gap-2"
                 whileHover={{ scale: 1.05, y: -2 }}
                 whileTap={{ scale: 0.95 }}
               >
-                Learn More
+                <LineChart className="w-5 h-5" />
+                View Demo
               </motion.button>
             </motion.div>
 
             {/* Stats */}
             <motion.div
-              className="grid grid-cols-3 gap-8 max-w-2xl mx-auto"
+              className="grid grid-cols-3 gap-8 max-w-3xl mx-auto"
               variants={containerVariants}
-              initial="hidden"
-              animate="visible"
             >
               {[
-                { value: "50K+", label: "Players" },
-                { value: "500K+", label: "Matches" },
-                { value: "$5M+", label: "Winnings" },
+                { value: "$2.5M+", label: "Total Winnings", icon: DollarSign },
+                { value: "50K+", label: "Active Traders", icon: TrendingUp },
+                { value: "500K+", label: "Matches Played", icon: BarChart3 },
               ].map((stat, idx) => (
                 <motion.div
                   key={idx}
                   variants={itemVariants}
-                  className="p-6 rounded-xl border border-white/8 bg-white/[0.05] backdrop-blur-sm hover:border-cyan-500/30 transition-all"
+                  className="p-6 rounded-2xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-sm hover:border-emerald-500/30 hover:bg-slate-800/50 transition-all group"
                 >
-                  <div className="text-3xl font-black bg-gradient-to-r from-cyan-400 to-cyan-300 bg-clip-text text-transparent">
+                  <stat.icon className="w-6 h-6 text-emerald-500 mb-3 mx-auto group-hover:scale-110 transition-transform" />
+                  <div className="text-3xl font-black text-white mb-1">
                     {stat.value}
                   </div>
-                  <div className="text-sm text-gray-400 mt-2">{stat.label}</div>
+                  <div className="text-sm text-slate-400 font-medium">{stat.label}</div>
                 </motion.div>
               ))}
             </motion.div>
           </motion.div>
         </section>
 
-        {/* Game Preview */}
-        <section className="py-20 px-8">
+        {/* Interactive Game Preview */}
+        <section className="py-24 px-8">
           <div className="max-w-4xl mx-auto">
             <motion.div
-              className="p-12 rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.08] to-white/[0.02] backdrop-blur-xl"
+              className="text-center mb-12"
+              initial={{ opacity: 0, y: 30 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+            >
+              <h2 className="text-4xl md:text-5xl font-bold text-white mb-4">
+                Experience Live Trading
+              </h2>
+              <p className="text-slate-400 text-lg">Make your market call</p>
+            </motion.div>
+
+            <motion.div
+              className="relative p-10 rounded-3xl border border-slate-800/80 bg-gradient-to-br from-slate-900/90 to-slate-800/50 backdrop-blur-xl overflow-hidden shadow-2xl"
               initial={{ opacity: 0, y: 40 }}
               whileInView={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.7 }}
-              viewport={{ once: true, margin: "-150px" }}
+              viewport={{ once: true }}
             >
-              {/* Match header */}
-              <div className="flex items-center justify-between mb-8 pb-8 border-b border-white/10">
-                <div className="flex gap-3">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-cyan-500 to-cyan-600" />
-                  <div>
-                    <div className="text-sm font-bold text-white">You</div>
-                    <div className="text-xs text-gray-400">+$1,240</div>
-                  </div>
-                </div>
-                <div className="text-cyan-400 font-black text-lg">VS</div>
-                <div className="flex gap-3">
-                  <div>
-                    <div className="text-sm font-bold text-white text-right">Opponent</div>
-                    <div className="text-xs text-gray-400 text-right">+$890</div>
-                  </div>
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-magenta-500 to-magenta-600" />
-                </div>
-              </div>
+              {/* Glow effect when prediction is made */}
+              {prediction && (
+                <motion.div
+                  className="absolute inset-0 -z-10"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: [0, 0.3, 0] }}
+                  transition={{ duration: 1.5 }}
+                >
+                  <div className={`absolute inset-0 ${prediction === 'up' ? 'bg-emerald-500/20' : 'bg-red-500/20'} blur-3xl`} />
+                </motion.div>
+              )}
 
-              {/* Chart placeholder */}
-              <div className="mb-8 p-6 rounded-lg bg-slate-800/30 border border-white/5">
-                <div className="flex items-end justify-between h-40 gap-1 mb-4">
-                  {[35, 48, 42, 55, 52, 68, 60, 75, 70, 85].map((h, i) => (
+              {/* Chart */}
+              <div className="mb-8 p-8 rounded-2xl bg-slate-950/50 border border-slate-800/50 backdrop-blur-sm">
+                <div className="flex items-end justify-between h-56 gap-2 mb-6">
+                  {[40, 45, 38, 52, 48, 65, 58, 72, 68, 82, 75, 88].map((h, i) => (
                     <motion.div
                       key={i}
-                      className="flex-1 bg-gradient-to-t from-cyan-500 to-cyan-400 rounded-t"
-                      style={{ height: `${h}%` }}
-                      whileHover={{ opacity: 1 }}
-                      initial={{ opacity: 0.6 }}
-                    />
+                      className="flex-1 rounded-t relative group cursor-pointer"
+                      style={{
+                        height: `${h}%`,
+                        background: prediction === 'up'
+                          ? 'linear-gradient(to top, rgba(16, 185, 129, 0.8), rgba(16, 185, 129, 1))'
+                          : prediction === 'down'
+                          ? 'linear-gradient(to top, rgba(239, 68, 68, 0.8), rgba(239, 68, 68, 1))'
+                          : 'linear-gradient(to top, rgba(59, 130, 246, 0.6), rgba(59, 130, 246, 0.9))'
+                      }}
+                      initial={{ height: 0 }}
+                      animate={{ height: `${h}%` }}
+                      transition={{ delay: i * 0.05, duration: 0.5 }}
+                      whileHover={{ opacity: 1, scale: 1.05 }}
+                    >
+                      <div className="absolute -top-10 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-900/90 px-2 py-1 rounded text-xs font-bold text-emerald-400 border border-slate-700/50">
+                        ${(180 + h).toFixed(2)}
+                      </div>
+                    </motion.div>
                   ))}
                 </div>
-                <div className="flex justify-between text-xs text-gray-400">
-                  <span>AAPL</span>
-                  <span>Live • +3.2%</span>
+                <div className="flex justify-between items-center">
+                  <div>
+                    <span className="text-white font-bold text-lg">NVDA</span>
+                    <span className="text-slate-500 text-sm ml-3 font-medium">NVIDIA Corporation</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-emerald-400 font-bold text-lg">+2.8%</span>
+                    <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20">
+                      <motion.div
+                        className="w-1.5 h-1.5 rounded-full bg-emerald-400"
+                        animate={{ opacity: [1, 0.3, 1] }}
+                        transition={{ duration: 1.5, repeat: Infinity }}
+                      />
+                      <span className="text-emerald-400 font-bold text-xs tracking-wide">LIVE</span>
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              {/* Action buttons */}
-              <div className="grid grid-cols-3 gap-3">
+              {/* Interactive Buttons */}
+              <div className="grid grid-cols-2 gap-5">
                 <motion.button
-                  className="py-3 rounded-lg bg-green-500/80 text-white font-bold hover:bg-green-500 transition-all"
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
+                  className="relative py-7 rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-600 text-white font-black text-xl overflow-hidden group shadow-xl shadow-emerald-500/20"
+                  onClick={() => setPrediction('up')}
+                  whileHover={{ scale: 1.03, y: -3 }}
+                  whileTap={{ scale: 0.97 }}
                 >
-                  BUY
+                  <motion.div
+                    className="absolute inset-0 bg-white/20"
+                    initial={{ x: '-100%' }}
+                    whileHover={{ x: '100%' }}
+                    transition={{ duration: 0.6 }}
+                  />
+                  <span className="relative flex items-center justify-center gap-3">
+                    <TrendingUp className="w-7 h-7" strokeWidth={3} />
+                    LONG
+                  </span>
+                  {prediction === 'up' && (
+                    <motion.div
+                      className="absolute inset-0 border-4 border-white/60 rounded-2xl"
+                      initial={{ opacity: 0, scale: 0.8 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                    />
+                  )}
                 </motion.button>
+
                 <motion.button
-                  className="py-3 rounded-lg bg-red-500/80 text-white font-bold hover:bg-red-500 transition-all"
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
+                  className="relative py-7 rounded-2xl bg-gradient-to-br from-red-500 to-red-600 text-white font-black text-xl overflow-hidden group shadow-xl shadow-red-500/20"
+                  onClick={() => setPrediction('down')}
+                  whileHover={{ scale: 1.03, y: -3 }}
+                  whileTap={{ scale: 0.97 }}
                 >
-                  SELL
-                </motion.button>
-                <motion.button
-                  className="py-3 rounded-lg border-2 border-gray-600 text-gray-300 font-bold hover:border-gray-500 transition-all"
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                >
-                  HOLD
+                  <motion.div
+                    className="absolute inset-0 bg-white/20"
+                    initial={{ x: '-100%' }}
+                    whileHover={{ x: '100%' }}
+                    transition={{ duration: 0.6 }}
+                  />
+                  <span className="relative flex items-center justify-center gap-3">
+                    <TrendingUp className="w-7 h-7 rotate-180" strokeWidth={3} />
+                    SHORT
+                  </span>
+                  {prediction === 'down' && (
+                    <motion.div
+                      className="absolute inset-0 border-4 border-white/60 rounded-2xl"
+                      initial={{ opacity: 0, scale: 0.8 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                    />
+                  )}
                 </motion.button>
               </div>
+
+              {prediction && (
+                <motion.div
+                  className="text-center mt-8 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                >
+                  <p className="text-emerald-300 font-semibold text-lg">
+                    Position locked! Ready to trade for real?
+                  </p>
+                </motion.div>
+              )}
             </motion.div>
           </div>
         </section>
 
-        {/* Features Section */}
-        <section className="py-32 px-8">
-          <div className="max-w-7xl mx-auto">
-            <motion.h2
-              className="text-5xl md:text-6xl font-black text-center mb-20"
-              initial={{ opacity: 0, y: 40 }}
+        {/* Features Section - Professional */}
+        <section className="py-24 px-8 bg-gradient-to-b from-transparent via-slate-900/30 to-transparent">
+          <div className="max-w-6xl mx-auto">
+            <motion.div
+              className="text-center mb-16"
+              initial={{ opacity: 0, y: 30 }}
               whileInView={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.7 }}
-              viewport={{ once: true, margin: "-200px" }}
+              viewport={{ once: true }}
             >
-              <span className="text-white">Why Players Love</span>
-              <br />
-              <span
-                style={{
-                  background: "linear-gradient(135deg, #00e6c5 0%, #d85ce0 100%)",
-                  WebkitBackgroundClip: "text",
-                  WebkitTextFillColor: "transparent",
-                  backgroundClip: "text",
-                }}
-              >
-                Stock Guessr
-              </span>
-            </motion.h2>
+              <h2 className="text-4xl md:text-5xl font-bold text-white mb-4">
+                Why Top Traders Choose Us
+              </h2>
+              <p className="text-slate-400 text-lg">The competitive edge you need</p>
+            </motion.div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
               {[
-                { icon: Zap, title: "Quick Matches", desc: "5-minute matches for instant results" },
-                { icon: Target, title: "Pure Skill", desc: "Win based on market intelligence, not luck" },
-                { icon: Crown, title: "Climb Rankings", desc: "Competitive ladder with real rewards" },
-                { icon: Brain, title: "Learn & Improve", desc: "AI-powered analysis of every trade" },
-                { icon: Users, title: "Global Duels", desc: "Compete against traders worldwide" },
-                { icon: Lock, title: "Secure Trading", desc: "Enterprise-grade security & encryption" },
+                { icon: Clock, title: "Rapid Execution", desc: "5-minute competitive rounds with instant settlement", color: "emerald" },
+                { icon: Award, title: "Performance Based", desc: "Rankings and rewards tied to trading accuracy", color: "blue" },
+                { icon: Shield, title: "Market Integrity", desc: "Real-time data from trusted financial sources", color: "purple" },
               ].map((item, idx) => (
                 <motion.div
                   key={idx}
-                  className="p-8 rounded-xl border border-white/8 bg-white/[0.05] hover:border-cyan-500/30 hover:bg-white/[0.08] transition-all cursor-pointer"
+                  className="group relative p-8 rounded-2xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-sm cursor-pointer overflow-hidden"
                   onMouseEnter={() => setHoveredFeature(idx)}
                   onMouseLeave={() => setHoveredFeature(null)}
                   initial={{ opacity: 0, y: 30 }}
                   whileInView={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.5, delay: idx * 0.06 }}
-                  viewport={{ once: true, margin: "-150px" }}
-                  whileHover={{ y: -4 }}
+                  transition={{ duration: 0.5, delay: idx * 0.15 }}
+                  viewport={{ once: true }}
+                  whileHover={{ y: -6, borderColor: 'rgba(16, 185, 129, 0.3)' }}
                 >
+                  {/* Gradient glow on hover */}
                   <motion.div
-                    className="w-12 h-12 rounded-lg bg-gradient-to-br from-cyan-500 to-cyan-600 flex items-center justify-center mb-4"
-                    animate={hoveredFeature === idx ? { scale: 1.1 } : { scale: 1 }}
-                    transition={{ duration: 0.2 }}
-                  >
-                    <item.icon className="w-6 h-6 text-white" />
-                  </motion.div>
-                  <h3 className="text-lg font-bold text-white mb-2">{item.title}</h3>
-                  <p className="text-gray-400 text-sm">{item.desc}</p>
-                </motion.div>
-              ))}
-            </div>
-          </div>
-        </section>
+                    className={`absolute inset-0 bg-gradient-to-br ${
+                      item.color === 'emerald' ? 'from-emerald-500/10 to-emerald-600/5' :
+                      item.color === 'blue' ? 'from-blue-500/10 to-blue-600/5' :
+                      'from-purple-500/10 to-purple-600/5'
+                    } opacity-0 group-hover:opacity-100 transition-opacity duration-500`}
+                  />
 
-        {/* How It Works */}
-        <section className="py-32 px-8 bg-gradient-to-b from-transparent via-cyan-500/5 to-transparent">
-          <div className="max-w-5xl mx-auto">
-            <motion.h2
-              className="text-5xl md:text-6xl font-black text-center mb-20"
-              initial={{ opacity: 0, y: 40 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.7 }}
-              viewport={{ once: true, margin: "-200px" }}
-            >
-              <span className="text-white">How It Works</span>
-            </motion.h2>
-
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              {[
-                { num: "1", title: "Create Account", desc: "Sign up in 30 seconds" },
-                { num: "2", title: "Find Opponent", desc: "Match with equal skill" },
-                { num: "3", title: "Trade", desc: "Predict stock movements" },
-                { num: "4", title: "Earn", desc: "Win real prizes" },
-              ].map((step, idx) => (
-                <motion.div
-                  key={idx}
-                  className="relative"
-                  initial={{ opacity: 0, y: 30 }}
-                  whileInView={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.5, delay: idx * 0.08 }}
-                  viewport={{ once: true, margin: "-150px" }}
-                >
-                  <div className="p-6 rounded-xl border border-white/8 bg-white/[0.05]">
-                    <div className="w-10 h-10 rounded-lg bg-cyan-500/20 text-cyan-400 font-black flex items-center justify-center mb-4">
-                      {step.num}
-                    </div>
-                    <h3 className="font-bold text-white mb-1">{step.title}</h3>
-                    <p className="text-sm text-gray-400">{step.desc}</p>
+                  <div className="relative">
+                    <motion.div
+                      className={`w-16 h-16 rounded-xl bg-gradient-to-br ${
+                        item.color === 'emerald' ? 'from-emerald-500 to-emerald-600' :
+                        item.color === 'blue' ? 'from-blue-500 to-blue-600' :
+                        'from-purple-500 to-purple-600'
+                      } flex items-center justify-center mb-6 shadow-lg ${
+                        item.color === 'emerald' ? 'shadow-emerald-500/20' :
+                        item.color === 'blue' ? 'shadow-blue-500/20' :
+                        'shadow-purple-500/20'
+                      }`}
+                      animate={hoveredFeature === idx ? { scale: 1.1, rotate: 5 } : { scale: 1, rotate: 0 }}
+                      transition={{ duration: 0.3 }}
+                    >
+                      <item.icon className="w-8 h-8 text-white" strokeWidth={2.5} />
+                    </motion.div>
+                    <h3 className="text-2xl font-bold text-white mb-3">{item.title}</h3>
+                    <p className="text-slate-400 leading-relaxed">{item.desc}</p>
                   </div>
                 </motion.div>
               ))}
@@ -380,39 +555,75 @@ export default function LandingPage() {
           </div>
         </section>
 
-        {/* Final CTA */}
+        {/* Final CTA - Professional */}
         <section className="py-32 px-8">
           <motion.div
-            className="max-w-4xl mx-auto text-center"
+            className="max-w-4xl mx-auto"
             initial={{ opacity: 0, y: 50 }}
             whileInView={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.7 }}
-            viewport={{ once: true, margin: "-200px" }}
+            viewport={{ once: true }}
           >
-            <h2 className="text-5xl md:text-6xl font-black text-white mb-6">
-              Ready to Compete?
-            </h2>
-            <p className="text-gray-300 text-xl mb-10 max-w-2xl mx-auto">
-              Join thousands of traders in the ultimate competitive trading experience.
-            </p>
-            <Link href="/register">
-              <motion.button
-                className="px-12 py-5 rounded-lg text-lg font-bold text-white bg-gradient-to-r from-cyan-500 to-cyan-600 hover:from-cyan-400 hover:to-cyan-500 transition-all shadow-xl shadow-cyan-500/30"
-                whileHover={{ scale: 1.08, y: -3 }}
-                whileTap={{ scale: 0.95 }}
-              >
-                Get Started Free
-              </motion.button>
-            </Link>
+            <div className="relative p-12 rounded-3xl border border-slate-800/80 bg-gradient-to-br from-slate-900/90 to-slate-800/50 backdrop-blur-xl overflow-hidden">
+              {/* Glow effect */}
+              <div className="absolute inset-0 bg-gradient-to-r from-emerald-500/10 via-blue-500/10 to-purple-500/10 opacity-50" />
+
+              <div className="relative text-center">
+                <motion.div
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-500/10 border border-emerald-500/20 mb-8"
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  whileInView={{ opacity: 1, scale: 1 }}
+                  viewport={{ once: true }}
+                >
+                  <BarChart3 className="w-4 h-4 text-emerald-400" />
+                  <span className="text-sm font-bold text-emerald-300 tracking-wide">JOIN THE COMPETITION</span>
+                </motion.div>
+
+                <h2 className="text-4xl md:text-6xl font-bold text-white mb-6 leading-tight">
+                  Start Your Trading Journey
+                  <br />
+                  <span className="bg-gradient-to-r from-emerald-400 via-emerald-500 to-blue-500 bg-clip-text text-transparent">
+                    Risk-Free
+                  </span>
+                </h2>
+
+                <p className="text-slate-400 text-xl mb-10 max-w-2xl mx-auto">
+                  No deposits required. Test your market predictions against {onlineUsers.toLocaleString()} active traders.
+                </p>
+
+                <Link href="/register">
+                  <motion.button
+                    className="px-12 py-5 rounded-xl text-xl font-bold text-white bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 transition-all shadow-2xl shadow-emerald-500/40 inline-flex items-center gap-3"
+                    whileHover={{ scale: 1.05, y: -3 }}
+                    whileTap={{ scale: 0.95 }}
+                  >
+                    <DollarSign className="w-6 h-6" />
+                    Create Free Account
+                    <ArrowRight className="w-6 h-6" />
+                  </motion.button>
+                </Link>
+
+                <p className="text-slate-500 text-sm mt-6">
+                  Full access • No credit card required • Start in 30 seconds
+                </p>
+              </div>
+            </div>
           </motion.div>
         </section>
 
-        {/* Footer */}
-        <footer className="py-12 px-8 border-t border-white/5">
-          <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-8">
-            <StockGuessrLogo />
-            <div className="text-sm text-gray-400">
-              © 2024 Stock Guessr. All rights reserved.
+        {/* Footer - Professional */}
+        <footer className="py-10 px-8 border-t border-slate-800/50 bg-slate-950/50">
+          <div className="max-w-7xl mx-auto">
+            <div className="flex flex-col md:flex-row justify-between items-center gap-6 mb-6">
+              <StockGuessrLogo />
+              <div className="flex gap-6 text-sm text-slate-400">
+                <a href="#" className="hover:text-emerald-400 transition-colors">Terms</a>
+                <a href="#" className="hover:text-emerald-400 transition-colors">Privacy</a>
+                <a href="#" className="hover:text-emerald-400 transition-colors">Contact</a>
+              </div>
+            </div>
+            <div className="text-center text-sm text-slate-500 border-t border-slate-800/50 pt-6">
+              © 2025 StockGuessr. Market data for educational and competitive purposes only. Not financial advice.
             </div>
           </div>
         </footer>
