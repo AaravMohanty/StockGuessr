@@ -64,13 +64,18 @@ const matchSchema = new mongoose.Schema(
     matchDuration: Number, // in seconds
     status: {
       type: String,
-      enum: ['IN_PROGRESS', 'COMPLETED'],
-      default: 'IN_PROGRESS',
+      enum: ['WAITING', 'IN_PROGRESS', 'COMPLETED'], // Added WAITING
+      default: 'WAITING',
     },
     notes: String,
     aiAnalysis: {
       player1Analysis: String,
       player2Analysis: String,
+    },
+    joinCode: {
+      type: String,
+      unique: true,
+      sparse: true,
     },
   },
   { timestamps: true }

@@ -60,29 +60,45 @@ io.on('connection', (socket) => {
   // Join match room
   socket.on('join_match', (data) => {
     const { matchId, userId } = data;
-    socket.join(`match_${matchId}`);
-    activeMatches.set(`match_${matchId}`, true);
+    const roomName = `match_${matchId}`;
+    
+    socket.join(roomName);
+    activeMatches.set(roomName, true);
 
-    io.to(`match_${matchId}`).emit('player_joined', {
+    const room = io.sockets.adapter.rooms.get(roomName);
+    const playerCount = room ? room.size : 0;
+
+    console.log(`User ${userId} joined match ${matchId}. Total players: ${playerCount}`);
+
+    // Notify everyone in the room (including sender)
+    io.to(roomName).emit('player_joined', {
       userId,
-      playerCount: io.sockets.adapter.rooms.get(`match_${matchId}`).size,
+      playerCount,
     });
+
+    // If 2 players, start game
+    if (playerCount === 2) {
+      io.to(roomName).emit('match_ready', { start: true });
+    }
   });
 
   // Handle game state updates
   socket.on('game_state_update', (data) => {
     const { matchId, gameState } = data;
-    io.to(`match_${matchId}`).emit('game_state_update', gameState);
+    socket.to(`match_${matchId}`).emit('game_state_update', gameState);
   });
 
   // Handle trade action
   socket.on('trade_action', (data) => {
-    const { matchId, playerId, action, price, week } = data;
-    io.to(`match_${matchId}`).emit('trade_executed', {
+    const { matchId, playerId, action, price, week, pnl, shares } = data;
+    // Broadcast to opponent
+    socket.to(`match_${matchId}`).emit('opponent_trade', {
       playerId,
       action,
       price,
       week,
+      pnl,
+      shares
     });
   });
 

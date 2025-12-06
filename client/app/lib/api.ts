@@ -56,8 +56,10 @@ export const scenariosAPI = {
 
 // Matches endpoints
 export const matchesAPI = {
-  createMatch: (scenarioId: string, opponentId?: string) =>
-    api.post('/matches', { scenarioId, opponentId }),
+  createMatch: (scenarioId?: string) =>
+    api.post('/matches', { scenarioId }),
+  joinMatch: (joinCode: string) =>
+    api.post('/matches/join', { joinCode }),
   getMatch: (id: string) => api.get(`/matches/${id}`),
   updateMatch: (id: string, data: any) =>
     api.put(`/matches/${id}`, data),

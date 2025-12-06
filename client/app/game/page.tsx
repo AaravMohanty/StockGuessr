@@ -2,7 +2,7 @@
 "use client";
 
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, Play, TrendingUp, TrendingDown, Clock, DollarSign, BarChart2 } from "lucide-react";
+import { ArrowLeft, Play, TrendingUp, TrendingDown, Clock, DollarSign, BarChart2, Users, Copy } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useRef } from "react";
@@ -11,6 +11,8 @@ import { scenariosAPI, matchesAPI } from "@/lib/api";
 import GameTimer from "@/components/GameTimer";
 import ShareInput from "@/components/ShareInput";
 import GameChart from "@/components/GameChart";
+import Lobby from "@/components/Lobby";
+import { io, Socket } from "socket.io-client";
 
 interface Candle {
   date: string;
@@ -49,7 +51,7 @@ interface Trade {
   timestamp: Date;
 }
 
-type GamePhase = "matchmaking" | "ready" | "playing" | "completed" | "error";
+type GamePhase = "lobby" | "waiting" | "playing" | "completed" | "error";
 type RoundPhase = "reveal" | "decision";
 
 const ROUND_DURATION = 12; // Total seconds per week
@@ -61,10 +63,12 @@ export default function GamePage() {
 
   // Game State
   const [scenario, setScenario] = useState<Scenario | null>(null);
-  const [gameState, setGameState] = useState<GamePhase>("matchmaking");
+  const [gameState, setGameState] = useState<GamePhase>("lobby");
   const [currentWeek, setCurrentWeek] = useState(0);
   const [roundPhase, setRoundPhase] = useState<RoundPhase>("reveal");
-  const [matchId, setMatchId] = useState<string | null>(null);
+  const [matchData, setMatchData] = useState<any>(null);
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [opponent, setOpponent] = useState<any>(null);
 
   // Trading State
   const [availableCash, setAvailableCash] = useState(100000);
@@ -73,48 +77,69 @@ export default function GamePage() {
   const [selectedShares, setSelectedShares] = useState(0);
 
   // UI State
-  const [isLoadingScenario, setIsLoadingScenario] = useState(true);
+  const [isLoadingScenario, setIsLoadingScenario] = useState(false);
   const [showNews, setShowNews] = useState(false);
 
-  // Fetch scenario
+  // Auth Check
   useEffect(() => {
-    if (!loading && isAuthenticated) {
-      fetchScenario();
-    } else if (!loading && !isAuthenticated) {
+    if (!loading && !isAuthenticated) {
       router.push("/login");
     }
-  }, [isAuthenticated, loading]);
+  }, [isAuthenticated, loading, router]);
 
-  const fetchScenario = async () => {
+  // Socket Cleanup
+  useEffect(() => {
+    return () => {
+      if (socket) {
+        socket.disconnect();
+      }
+    };
+  }, [socket]);
+
+  const handleMatchStart = async (match: any) => {
+    setMatchData(match);
+
+    // Connect Socket
+    const newSocket = io(process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001');
+    setSocket(newSocket);
+
+    newSocket.on('connect', () => {
+      console.log('Connected to socket');
+      newSocket.emit('join_match', { matchId: match._id, userId: user?._id });
+    });
+
+    newSocket.on('player_joined', (data: any) => {
+      console.log('Player joined:', data);
+      // If we are waiting and someone joins, we might update UI
+    });
+
+    newSocket.on('match_ready', async () => {
+      console.log('Match Ready!');
+      await fetchScenario(match.stockScenario._id || match.stockScenario);
+      setGameState("playing");
+      setCurrentWeek(0);
+      setRoundPhase("reveal");
+      startRound();
+    });
+
+    newSocket.on('opponent_trade', (data: any) => {
+      console.log('Opponent traded:', data);
+      // Could show a toast or update opponent stats
+    });
+
+    setGameState("waiting");
+  };
+
+  const fetchScenario = async (scenarioId: string) => {
     try {
       setIsLoadingScenario(true);
-      const response = await scenariosAPI.getRandomScenario();
+      const response = await scenariosAPI.getScenarioById(scenarioId);
       setScenario(response.data);
-      setGameState("ready");
     } catch (error) {
       console.error("Failed to fetch scenario:", error);
       setGameState("error");
     } finally {
       setIsLoadingScenario(false);
-    }
-  };
-
-  const startGame = async () => {
-    if (!scenario || !user) return;
-
-    try {
-      // Create match on backend
-      const matchRes = await matchesAPI.createMatch(scenario._id);
-      setMatchId(matchRes.data._id);
-
-      setGameState("playing");
-      setCurrentWeek(0);
-      setRoundPhase("reveal");
-
-      // Auto-start first round logic
-      startRound();
-    } catch (error) {
-      console.error("Failed to start match:", error);
     }
   };
 
@@ -150,48 +175,26 @@ export default function GamePage() {
 
     let newCash = availableCash;
     let newPosition = position ? { ...position } : null;
+    let pnl = 0;
 
     if (action === "BUY") {
       if (selectedShares > 0) {
         const cost = selectedShares * price;
-        // Allow buying if we have cash (Long) OR if we are covering a short (reducing negative shares)
-        // Ideally we check margin, but simpler: Can only Open Long if Cash >= Cost.
-        // Covering Short: Always allow if we have the cash (Cost) but wait, covering reduces cash.
-
-        // Simplified Rule: 
-        // 1. If Position >= 0 (Long or Flat): Need Cash >= Cost.
-        // 2. If Position < 0 (Short): We are buying back. Need Cash >= Cost? Yes, usually.
-
         if (newCash >= cost) {
-          newCash -= cost; // Cash decreases
-
+          newCash -= cost;
           if (!newPosition) {
-            // Open Long
             newPosition = { shares: selectedShares, entryPrice: price, entryWeek: currentWeek };
           } else {
-            // Add to Long or Cover Short
             const totalShares = newPosition.shares + selectedShares;
-
             if (totalShares === 0) {
-              // Closed completely
-              // PnL = (Entry - Exit) * Abs(Shares) -- Wait, let's just calc realized PnL on close
-              // Short PnL: (Entry - BuyPrice) * Abs(OldShares)
-              const pnl = (newPosition.entryPrice - price) * Math.abs(newPosition.shares);
+              pnl = (newPosition.entryPrice - price) * Math.abs(newPosition.shares);
               newTrade.pnl = pnl;
               newPosition = null;
-
-              // Note: For shorts, 'entryPrice' was the Sell Price.
             } else if (newPosition.shares < 0) {
-              // Partial Cover
-              // PnL on the covered portion?
-              // (Entry - Price) * SharesCovered
-              const pnl = (newPosition.entryPrice - price) * selectedShares;
+              pnl = (newPosition.entryPrice - price) * selectedShares;
               newTrade.pnl = pnl;
-
               newPosition.shares = totalShares;
-              // Entry price stays same for remaining short
             } else {
-              // Adding to Long
               newPosition = {
                 shares: totalShares,
                 entryPrice: ((newPosition.shares * newPosition.entryPrice) + cost) / totalShares,
@@ -201,19 +204,15 @@ export default function GamePage() {
           }
           newTrade.shares = selectedShares;
         } else {
-          alert("Not enough cash!"); // Simple feedback
+          alert("Not enough cash!");
           return;
         }
       }
     } else if (action === "SELL") {
       if (selectedShares > 0) {
         const proceeds = selectedShares * price;
-        newCash += proceeds; // Cash increases
-
+        newCash += proceeds;
         if (!newPosition) {
-          // Open Short
-          // Margin Check: Can't short more than 1x Cash?
-          // Current Equity = Cash. Max Short Value = Cash.
           if (proceeds <= availableCash) {
             newPosition = { shares: -selectedShares, entryPrice: price, entryWeek: currentWeek };
           } else {
@@ -221,44 +220,21 @@ export default function GamePage() {
             return;
           }
         } else {
-          // Add to Short or Sell Long
           const totalShares = newPosition.shares - selectedShares;
-
           if (totalShares === 0) {
-            // Closed Long
-            const pnl = (price - newPosition.entryPrice) * newPosition.shares;
+            pnl = (price - newPosition.entryPrice) * newPosition.shares;
             newTrade.pnl = pnl;
             newPosition = null;
           } else if (newPosition.shares > 0) {
-            // Partial Sell Long
-            const pnl = (price - newPosition.entryPrice) * selectedShares;
+            pnl = (price - newPosition.entryPrice) * selectedShares;
             newTrade.pnl = pnl;
             newPosition.shares = totalShares;
-            // Entry price stays same
           } else {
-            // Adding to Short
-            // Check margin again?
-            const currentShortValue = Math.abs(newPosition.shares) * price;
-            const newShortValue = currentShortValue + proceeds;
-            // Approx Margin check
-            if (newShortValue <= (newCash - proceeds)) { // Check against old cash base?
-              // Let's use simplified: Total Short Value <= Total Cash
-              // newCash is already inflated by proceeds.
-              // Equity = newCash - newShortValue.
-              // Keep it simple: Open Short Limit
-              newPosition = {
-                shares: totalShares,
-                entryPrice: ((Math.abs(newPosition.shares) * newPosition.entryPrice) + proceeds) / Math.abs(totalShares),
-                entryWeek: newPosition.entryWeek
-              };
-            } else {
-              // Allow for now to avoid blocking mid-game, or implement stricter check later
-              newPosition = {
-                shares: totalShares,
-                entryPrice: ((Math.abs(newPosition.shares) * newPosition.entryPrice) + proceeds) / Math.abs(totalShares),
-                entryWeek: newPosition.entryWeek
-              };
-            }
+            newPosition = {
+              shares: totalShares,
+              entryPrice: ((Math.abs(newPosition.shares) * newPosition.entryPrice) + proceeds) / Math.abs(totalShares),
+              entryWeek: newPosition.entryWeek
+            };
           }
         }
         newTrade.shares = selectedShares;
@@ -268,21 +244,29 @@ export default function GamePage() {
     setTrades([...trades, newTrade]);
     setAvailableCash(newCash);
     setPosition(newPosition);
-    setSelectedShares(0); // Reset input
+    setSelectedShares(0);
+
+    // Emit trade to opponent
+    if (socket && matchData) {
+      socket.emit('trade_action', {
+        matchId: matchData._id,
+        playerId: user?._id,
+        action,
+        price,
+        week: currentWeek,
+        pnl,
+        shares: selectedShares
+      });
+    }
 
     // Advance to next week or end game
     if (currentWeek < 3) {
       setCurrentWeek(prev => prev + 1);
       startRound();
     } else {
-      // Calculate Final Equity correctly
       let finalEquity = newCash;
       if (newPosition) {
-        // Close position at last price
         const lastPrice = scenario.gameCandles[3].close;
-        // Equity = Cash + (Shares * Price)
-        // If Long: Cash + (Pos * Price)
-        // If Short: Cash + (Neg * Price) -> Cash - (Pos * Price)
         finalEquity += newPosition.shares * lastPrice;
       }
       endGame(finalEquity, newPosition);
@@ -290,14 +274,12 @@ export default function GamePage() {
   };
 
   const endGame = async (finalEquity: number, finalPos: any) => {
-    if (!scenario || !matchId) return;
+    if (!scenario || !matchData) return;
 
-    // finalEquity already includes the position value (calculated in handleTrade)
-    // We just need to record the implicit close trade for display purposes
+    let calculatedEquity = finalEquity;
     if (finalPos) {
       const lastPrice = scenario.gameCandles[3].close;
 
-      // Record implicit sell for the trade history
       const closeTrade: Trade = {
         week: 3,
         action: finalPos.shares > 0 ? "SELL" : "BUY", // Sell if long, Buy to cover if short
@@ -315,84 +297,94 @@ export default function GamePage() {
     setGameState("completed");
 
     try {
-      await matchesAPI.updateMatch(matchId, {
-        player1FinalEquity: finalEquity,
-        player1Trades: trades,
-        status: "completed"
+      await matchesAPI.updateMatch(matchData._id, {
+        player1FinalEquity: calculatedEquity, // This logic needs to know if I am P1 or P2
+        // Actually, the API update handles specific fields.
+        // But wait, the API I wrote expects specific fields.
+        // I need to send MY equity.
+        // Let's adjust the API call or the API itself.
+        // The API `put` takes `player1FinalEquity` etc.
+        // I should probably send `finalEquity` and let server decide?
+        // Or just send both and server ignores one?
+        // I'll check if I am P1 or P2.
+        [matchData.player1.userId === user?._id ? 'player1FinalEquity' : 'player2FinalEquity']: calculatedEquity,
+        [matchData.player1.userId === user?._id ? 'player1Trades' : 'player2Trades']: trades,
+        status: "completed" // This might close the match prematurely if opponent isn't done.
+        // Server logic handles completion check.
       });
     } catch (error) {
       console.error("Failed to save match results:", error);
     }
   };
 
-  // Chart Data Preparation
-
-
-  if (loading || isLoadingScenario || !scenario) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-black flex flex-col items-center justify-center">
         <div className="animate-spin mb-4">
           <div className="w-12 h-12 border-4 border-purple-500/30 border-t-purple-500 rounded-full" />
         </div>
-        <p className="text-gray-400">Loading market data...</p>
       </div>
     );
   }
 
-  // --- READY STATE ---
-  if (gameState === "ready") {
+  // --- LOBBY STATE ---
+  if (gameState === "lobby") {
     return (
       <div className="min-h-screen bg-black flex flex-col items-center justify-center px-6 relative overflow-hidden">
-        {/* Background Effects */}
         <div className="absolute inset-0 bg-[url('/grid.svg')] opacity-10" />
         <div className="absolute w-96 h-96 bg-purple-600/20 rounded-full blur-3xl -top-20 -left-20 animate-pulse" />
 
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="z-10 text-center max-w-3xl"
-        >
-          <h1 className="text-6xl font-bold mb-6 bg-clip-text text-transparent bg-gradient-to-r from-purple-400 to-pink-600">
-            Market Challenge
+        <div className="z-10 w-full max-w-md">
+          <h1 className="text-5xl font-bold text-center mb-12 bg-clip-text text-transparent bg-gradient-to-r from-purple-400 to-pink-600">
+            StockGuessr
           </h1>
+          <Lobby onMatchStart={handleMatchStart} />
+        </div>
+      </div>
+    );
+  }
 
-          <div className="grid grid-cols-3 gap-6 mb-12">
-            <div className="p-6 rounded-2xl bg-white/5 border border-white/10 backdrop-blur">
-              <BarChart2 className="w-8 h-8 text-purple-400 mx-auto mb-3" />
-              <h3 className="text-lg font-bold">3 Months Context</h3>
-              <p className="text-sm text-gray-400">Analyze the trend before you trade</p>
-            </div>
-            <div className="p-6 rounded-2xl bg-white/5 border border-white/10 backdrop-blur">
-              <Clock className="w-8 h-8 text-blue-400 mx-auto mb-3" />
-              <h3 className="text-lg font-bold">4 Weeks</h3>
-              <p className="text-sm text-gray-400">Make quick decisions each week</p>
-            </div>
-            <div className="p-6 rounded-2xl bg-white/5 border border-white/10 backdrop-blur">
-              <DollarSign className="w-8 h-8 text-green-400 mx-auto mb-3" />
-              <h3 className="text-lg font-bold">$100k Starting</h3>
-              <p className="text-sm text-gray-400">Grow your portfolio to win</p>
+  // --- WAITING STATE ---
+  if (gameState === "waiting") {
+    return (
+      <div className="min-h-screen bg-black flex flex-col items-center justify-center px-6 relative overflow-hidden">
+        <div className="absolute inset-0 bg-[url('/grid.svg')] opacity-10" />
+
+        <div className="z-10 text-center">
+          <div className="mb-8 relative">
+            <div className="w-24 h-24 border-4 border-purple-500/30 border-t-purple-500 rounded-full animate-spin mx-auto" />
+            <div className="absolute inset-0 flex items-center justify-center">
+              <Users className="w-8 h-8 text-purple-400" />
             </div>
           </div>
 
-          <motion.button
-            onClick={startGame}
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            className="px-12 py-5 rounded-full bg-white text-black font-bold text-xl hover:shadow-[0_0_40px_rgba(255,255,255,0.3)] transition-all flex items-center gap-3 mx-auto"
-          >
-            <Play className="w-6 h-6 fill-black" />
-            Start Match
-          </motion.button>
-        </motion.div>
+          <h2 className="text-3xl font-bold text-white mb-4">Waiting for Opponent</h2>
+
+          {matchData?.joinCode && (
+            <div className="bg-white/5 border border-white/10 rounded-xl p-6 max-w-sm mx-auto backdrop-blur">
+              <p className="text-gray-400 text-sm mb-2 uppercase tracking-wider">Share this code</p>
+              <div className="flex items-center justify-center gap-4">
+                <span className="text-5xl font-mono font-bold text-white tracking-widest">
+                  {matchData.joinCode}
+                </span>
+                <button
+                  onClick={() => navigator.clipboard.writeText(matchData.joinCode)}
+                  className="p-2 hover:bg-white/10 rounded-lg transition"
+                >
+                  <Copy className="w-6 h-6 text-gray-400" />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     );
   }
 
   // --- PLAYING STATE ---
-  if (gameState === "playing") {
+  if (gameState === "playing" && scenario) {
     const currentCandle = scenario.gameCandles[currentWeek];
-    // Get ALL news for current week (now supports multiple headlines)
-    const currentWeekNews = scenario.news.filter(n => n.week === currentWeek + 1);
+    const news = scenario.news.find(n => n.week === currentWeek + 1);
 
     return (
       <div className="min-h-screen bg-black text-white flex flex-col">
@@ -552,7 +544,7 @@ export default function GamePage() {
 
 
   // --- COMPLETED STATE ---
-  if (gameState === "completed") {
+  if (gameState === "completed" && scenario) {
     const totalReturn = ((availableCash - 100000) / 100000) * 100;
 
     return (

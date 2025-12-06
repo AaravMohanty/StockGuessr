@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const Match = require('../models/Match');
 const StockScenario = require('../models/StockScenario');
 const User = require('../models/User');
@@ -6,25 +7,40 @@ const authMiddleware = require('../middleware/auth');
 
 const router = express.Router();
 
+// Generate 6-digit code
+const generateJoinCode = () => {
+  return crypto.randomInt(100000, 999999).toString();
+};
+
 // Create a new match
 router.post('/', authMiddleware, async (req, res, next) => {
   try {
-    const { scenarioId, opponentId } = req.body;
+    const { scenarioId } = req.body;
 
-    const scenario = await StockScenario.findById(scenarioId);
+    // If no scenario provided, pick random
+    let scenario;
+    if (scenarioId) {
+      scenario = await StockScenario.findById(scenarioId);
+    } else {
+      const count = await StockScenario.countDocuments();
+      const random = Math.floor(Math.random() * count);
+      scenario = await StockScenario.findOne().skip(random);
+    }
+
     if (!scenario) {
       return res.status(404).json({ message: 'Scenario not found' });
     }
 
-    let opponent;
-    if (opponentId) {
-      opponent = await User.findById(opponentId);
-      if (!opponent) {
-        return res.status(404).json({ message: 'Opponent not found' });
-      }
-    }
-
     const player1 = await User.findById(req.userId);
+    
+    // Generate unique code
+    let joinCode;
+    let isUnique = false;
+    while (!isUnique) {
+      joinCode = generateJoinCode();
+      const existing = await Match.findOne({ joinCode, status: 'WAITING' });
+      if (!existing) isUnique = true;
+    }
 
     const matchData = {
       player1: {
@@ -32,25 +48,48 @@ router.post('/', authMiddleware, async (req, res, next) => {
         username: player1.username,
         finalEquity: 100000,
       },
-      stockScenario: scenarioId,
+      stockScenario: scenario._id,
       stockTicker: scenario.ticker,
       stockDate: scenario.startDate,
-      status: 'IN_PROGRESS',
+      status: 'WAITING',
+      joinCode: joinCode
     };
 
-    if (opponent) {
-      matchData.player2 = {
-        userId: opponentId,
-        username: opponent.username,
-        finalEquity: 100000,
-      };
-    }
-
     const match = new Match(matchData);
-
     await match.save();
 
     res.status(201).json(match);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Join a match
+router.post('/join', authMiddleware, async (req, res, next) => {
+  try {
+    const { joinCode } = req.body;
+
+    const match = await Match.findOne({ joinCode, status: 'WAITING' });
+    if (!match) {
+      return res.status(404).json({ message: 'Match not found or already started' });
+    }
+
+    if (match.player1.userId.toString() === req.userId) {
+      return res.status(400).json({ message: 'You cannot join your own match' });
+    }
+
+    const player2 = await User.findById(req.userId);
+    
+    match.player2 = {
+      userId: req.userId,
+      username: player2.username,
+      finalEquity: 100000,
+    };
+    match.status = 'IN_PROGRESS';
+    
+    await match.save();
+
+    res.json(match);
   } catch (error) {
     next(error);
   }
@@ -86,52 +125,70 @@ router.put('/:id', authMiddleware, async (req, res, next) => {
     // Only allow owner to update
     if (
       match.player1.userId.toString() !== req.userId &&
-      match.player2.userId.toString() !== req.userId
+      (!match.player2 || match.player2.userId.toString() !== req.userId)
     ) {
       return res.status(403).json({ message: 'Not authorized to update this match' });
     }
 
-    match.player1.finalEquity = player1FinalEquity;
-    match.player2.finalEquity = player2FinalEquity;
-    match.player1.finalPnL = player1FinalEquity - 100000;
-    match.player2.finalPnL = player2FinalEquity - 100000;
-    match.player1.trades = player1Trades || [];
-    match.player2.trades = player2Trades || [];
-    match.status = 'COMPLETED';
-    match.notes = notes;
-
-    // Determine winner
-    if (player1FinalEquity > player2FinalEquity) {
-      match.winner = match.player1.userId;
-    } else if (player2FinalEquity > player1FinalEquity) {
-      match.winner = match.player2.userId;
+    if (player1FinalEquity !== undefined) {
+        match.player1.finalEquity = player1FinalEquity;
+        match.player1.finalPnL = player1FinalEquity - 100000;
+        if (player1Trades) match.player1.trades = player1Trades;
     }
+    
+    if (player2FinalEquity !== undefined && match.player2) {
+        match.player2.finalEquity = player2FinalEquity;
+        match.player2.finalPnL = player2FinalEquity - 100000;
+        if (player2Trades) match.player2.trades = player2Trades;
+    }
+
+    // Check if both finished? 
+    // For now, we might receive updates partially. 
+    // But usually this is called at the end. 
+    // Let's assume this is called when a player finishes.
+    
+    // If both have final equity, mark completed
+    // BUT, this endpoint seems to be designed to update everything at once?
+    // The previous code updated both. 
+    // Since we are now 1v1 distributed, each player might call this?
+    // Or we rely on socket to sync end?
+    // Let's keep it flexible. If we have both equities, we calculate winner.
+
+    if (match.player1.finalEquity !== 100000 && match.player2 && match.player2.finalEquity !== 100000) {
+        match.status = 'COMPLETED';
+        
+        // Determine winner
+        if (match.player1.finalEquity > match.player2.finalEquity) {
+            match.winner = match.player1.userId;
+        } else if (match.player2.finalEquity > match.player1.finalEquity) {
+            match.winner = match.player2.userId;
+        }
+    }
+    
+    if (notes) match.notes = notes;
 
     await match.save();
 
-    // Update user stats
-    const player1 = await User.findById(match.player1.userId);
-    const player2 = await User.findById(match.player2.userId);
+    // Update stats if completed
+    if (match.status === 'COMPLETED') {
+        // Update player 1
+        const p1 = await User.findById(match.player1.userId);
+        p1.stats.totalMatches += 1;
+        p1.stats.totalPnL += match.player1.finalPnL;
+        p1.stats.avgPnL = p1.stats.totalPnL / p1.stats.totalMatches;
+        if (match.winner && match.winner.toString() === p1._id.toString()) p1.stats.wins += 1;
+        else if (match.winner) p1.stats.losses += 1;
+        await p1.save();
 
-    player1.stats.totalMatches += 1;
-    player1.stats.totalPnL += match.player1.finalPnL;
-    player1.stats.avgPnL = player1.stats.totalPnL / player1.stats.totalMatches;
-    if (match.winner.toString() === player1._id.toString()) {
-      player1.stats.wins += 1;
-    } else {
-      player1.stats.losses += 1;
+        // Update player 2
+        const p2 = await User.findById(match.player2.userId);
+        p2.stats.totalMatches += 1;
+        p2.stats.totalPnL += match.player2.finalPnL;
+        p2.stats.avgPnL = p2.stats.totalPnL / p2.stats.totalMatches;
+        if (match.winner && match.winner.toString() === p2._id.toString()) p2.stats.wins += 1;
+        else if (match.winner) p2.stats.losses += 1;
+        await p2.save();
     }
-    await player1.save();
-
-    player2.stats.totalMatches += 1;
-    player2.stats.totalPnL += match.player2.finalPnL;
-    player2.stats.avgPnL = player2.stats.totalPnL / player2.stats.totalMatches;
-    if (match.winner.toString() === player2._id.toString()) {
-      player2.stats.wins += 1;
-    } else {
-      player2.stats.losses += 1;
-    }
-    await player2.save();
 
     res.json(match);
   } catch (error) {
@@ -167,7 +224,7 @@ router.patch('/:id/note', authMiddleware, async (req, res, next) => {
     // Only allow owner to add note
     if (
       match.player1.userId.toString() !== req.userId &&
-      match.player2.userId.toString() !== req.userId
+      (!match.player2 || match.player2.userId.toString() !== req.userId)
     ) {
       return res.status(403).json({ message: 'Not authorized to update this match' });
     }
@@ -192,7 +249,7 @@ router.delete('/:id', authMiddleware, async (req, res, next) => {
     // Only allow owner to delete
     if (
       match.player1.userId.toString() !== req.userId &&
-      match.player2.userId.toString() !== req.userId
+      (!match.player2 || match.player2.userId.toString() !== req.userId)
     ) {
       return res.status(403).json({ message: 'Not authorized to delete this match' });
     }
@@ -241,14 +298,14 @@ router.get('/:id/analysis', authMiddleware, async (req, res, next) => {
         scenario.news || [],
         match.player1.finalEquity || 100000
       ),
-      analyzeTradePerformance(
+      match.player2 ? analyzeTradePerformance(
         match.player2.trades || [],
         match.stockTicker,
         match.stockDate,
         scenario.gameCandles || [],
         scenario.news || [],
         match.player2.finalEquity || 100000
-      ),
+      ) : Promise.resolve("No opponent")
     ]);
 
     // Save analysis to match
