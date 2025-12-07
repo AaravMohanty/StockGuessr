@@ -7,28 +7,33 @@ interface GameTimerProps {
     isActive: boolean;
 }
 
-export default function GameTimer({ duration, onComplete, isActive }: GameTimerProps) {
+export default function GameTimer({ duration, endTime, onComplete, isActive }: GameTimerProps & { endTime?: number }) {
     const [timeLeft, setTimeLeft] = useState(duration);
 
     useEffect(() => {
         if (!isActive) return;
 
-        setTimeLeft(duration);
-        const interval = setInterval(() => {
-            setTimeLeft((prev) => {
-                if (prev <= 1) {
-                    clearInterval(interval);
+        const updateTimer = () => {
+            if (endTime) {
+                const remaining = Math.max(0, Math.ceil((endTime - Date.now()) / 1000));
+                setTimeLeft(remaining);
+                if (remaining <= 0) {
                     onComplete();
-                    return 0;
                 }
-                return prev - 1;
-            });
-        }, 1000);
+            } else {
+                // Fallback to duration if no endTime (legacy behavior)
+                setTimeLeft(duration);
+            }
+        };
+
+        updateTimer(); // Initial call
+        const interval = setInterval(updateTimer, 1000);
 
         return () => clearInterval(interval);
-    }, [duration, isActive, onComplete]);
+    }, [duration, endTime, isActive, onComplete]);
 
-    const progress = (timeLeft / duration) * 100;
+    const maxTime = endTime ? 12 : duration; // Approximate max time for progress bar if endTime used
+    const progress = (timeLeft / maxTime) * 100;
     const isUrgent = timeLeft <= 3;
 
     return (

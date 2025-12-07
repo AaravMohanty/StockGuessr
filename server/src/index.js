@@ -62,6 +62,62 @@ app.get('/', (req, res) => {
 // Socket.io
 const activeMatches = new Map();
 
+const ROUND_DURATION = 12 * 1000; // 12 seconds
+const DECISION_DURATION = 7 * 1000; // 7 seconds
+
+function startGameLoop(roomName, io) {
+  if (activeMatches.has(roomName)) return;
+
+  let currentWeek = 0;
+  let phase = 'reveal'; // reveal -> decision -> waiting_for_next_round
+
+  const matchState = {
+    currentWeek: 0,
+    phase: 'reveal',
+    endTime: Date.now() + (ROUND_DURATION - DECISION_DURATION),
+    isRunning: true
+  };
+
+  activeMatches.set(roomName, matchState);
+
+  const loop = async () => {
+    if (!activeMatches.has(roomName)) return;
+    const state = activeMatches.get(roomName);
+
+    // Phase: REVEAL (showing chart)
+    state.phase = 'reveal';
+    state.endTime = Date.now() + (ROUND_DURATION - DECISION_DURATION);
+    io.to(roomName).emit('match_state', state);
+
+    await new Promise(resolve => setTimeout(resolve, ROUND_DURATION - DECISION_DURATION));
+    if (!activeMatches.has(roomName)) return;
+
+    // Phase: DECISION (trading allowed)
+    state.phase = 'decision';
+    state.endTime = Date.now() + DECISION_DURATION;
+    io.to(roomName).emit('match_state', state);
+
+    await new Promise(resolve => setTimeout(resolve, DECISION_DURATION));
+    if (!activeMatches.has(roomName)) return;
+
+    // Phase: END OF ROUND (advance week)
+    state.currentWeek++;
+    
+    if (state.currentWeek >= 4) { // 4 weeks total (0-3)
+      state.phase = 'completed';
+      state.isRunning = false;
+      io.to(roomName).emit('match_state', state);
+      activeMatches.delete(roomName);
+      return;
+    } else {
+      // Loop again
+      loop();
+    }
+  };
+
+  loop();
+}
+
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
 
@@ -71,34 +127,38 @@ io.on('connection', (socket) => {
     const roomName = `match_${matchId}`;
 
     socket.join(roomName);
-    activeMatches.set(roomName, true);
 
     const room = io.sockets.adapter.rooms.get(roomName);
     const playerCount = room ? room.size : 0;
 
     console.log(`User ${userId} joined match ${matchId}. Total players: ${playerCount}`);
 
-    // Notify everyone in the room (including sender)
+    // Notify everyone in the room
     io.to(roomName).emit('player_joined', {
       userId,
       playerCount,
     });
 
-    // If 2 players, start game
+    // If 2 players, start game loop
+    // If 2 players, check if we need to start or sync
     if (playerCount === 2) {
       io.to(roomName).emit('match_ready', { start: true });
+      
+      if (!activeMatches.has(roomName)) {
+        startGameLoop(roomName, io);
+      } else {
+        // Match already running, sync the joining player
+        socket.emit('match_state', activeMatches.get(roomName));
+      }
+    } else if (activeMatches.has(roomName)) {
+       // If rejoining an active match (and somehow playerCount != 2, e.g. observer?), send current state
+       socket.emit('match_state', activeMatches.get(roomName));
     }
-  });
-
-  // Handle game state updates
-  socket.on('game_state_update', (data) => {
-    const { matchId, gameState } = data;
-    socket.to(`match_${matchId}`).emit('game_state_update', gameState);
   });
 
   // Handle trade action
   socket.on('trade_action', (data) => {
-    const { matchId, playerId, action, price, week, pnl, shares } = data;
+    const { matchId, playerId, action, price, week, pnl, shares, equity } = data;
     // Broadcast to opponent
     socket.to(`match_${matchId}`).emit('opponent_trade', {
       playerId,
@@ -106,7 +166,8 @@ io.on('connection', (socket) => {
       price,
       week,
       pnl,
-      shares
+      shares,
+      equity
     });
   });
 
