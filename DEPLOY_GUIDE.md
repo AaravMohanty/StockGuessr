@@ -31,8 +31,10 @@ CORS_ORIGIN=https://your-vercel-app.vercel.app
 
 ### Step 4: Deploy
 **Backend URL:** `https://stockguessr-production.up.railway.app`
+**Frontend URL:** `https://stock-guessr-ni6v.vercel.app`
+
 1. Railway has automatically deployed your app
-2. Use this URL for your frontend configuration
+2. Use these URLs for your configuration
 
 ---
 
