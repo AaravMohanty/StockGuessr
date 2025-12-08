@@ -468,8 +468,8 @@ export default function GameManager({ initialJoinCode }: GameManagerProps) {
 
         try {
             await matchesAPI.updateMatch(matchData._id, {
-                [matchData.player1.userId === user?._id ? 'player1FinalEquity' : 'player2FinalEquity']: calculatedEquity,
-                [matchData.player1.userId === user?._id ? 'player1Trades' : 'player2Trades']: finalTrades, // Use finalTrades
+                [matchData.player1.userId.toString() === user?._id?.toString() ? 'player1FinalEquity' : 'player2FinalEquity']: calculatedEquity,
+                [matchData.player1.userId.toString() === user?._id?.toString() ? 'player1Trades' : 'player2Trades']: finalTrades, // Use finalTrades
                 status: "completed"
             });
         } catch (error) {

@@ -184,11 +184,14 @@ router.put('/:id', authMiddleware, async (req, res, next) => {
       return res.status(403).json({ message: 'Not authorized to update this match' });
     }
 
+    console.log(`[UpdateMatch] ID: ${req.params.id} Body:`, req.body);
+
     if (player1FinalEquity !== undefined) {
       match.player1.finalEquity = player1FinalEquity;
       match.player1.finalPnL = player1FinalEquity - 100000;
       match.player1.isFinished = true;
       if (player1Trades) match.player1.trades = player1Trades;
+      console.log(`[UpdateMatch] Player 1 finished. Equity: ${player1FinalEquity}`);
     }
 
     if (player2FinalEquity !== undefined && match.player2) {
@@ -196,16 +199,30 @@ router.put('/:id', authMiddleware, async (req, res, next) => {
       match.player2.finalPnL = player2FinalEquity - 100000;
       match.player2.isFinished = true;
       if (player2Trades) match.player2.trades = player2Trades;
+      console.log(`[UpdateMatch] Player 2 finished. Equity: ${player2FinalEquity}`);
     }
 
     // Check if both finished using flags
-    if (match.player1.isFinished && match.player2 && match.player2.isFinished) {
+    const p1Finished = match.player1.isFinished;
+    // Check if p2 exists and is finished. If p2 doesn't exist (solo?), we might treat as finished?
+    // But current logic requires p2 for COMPLETED status if it was initialized?
+    // Actually, if match.player2.userId is set, then p2 exists.
+    const p2Exists = match.player2 && match.player2.userId;
+    const p2Finished = p2Exists ? match.player2.isFinished : true; // If no p2, consider finished?
+
+    console.log(`[UpdateMatch] Status Check - P1: ${p1Finished}, P2: ${p2Finished} (Exists: ${!!p2Exists})`);
+
+    if (p1Finished && p2Finished) {
       match.status = 'COMPLETED';
+      console.log('[UpdateMatch] Match COMPLETED. Calculating winner...');
 
       // Determine winner
-      if (match.player1.finalEquity > match.player2.finalEquity) {
+      let p1Equity = match.player1.finalEquity;
+      let p2Equity = p2Exists ? match.player2.finalEquity : -Infinity;
+
+      if (p1Equity > p2Equity) {
         match.winner = match.player1.userId;
-      } else if (match.player2.finalEquity > match.player1.finalEquity) {
+      } else if (p2Exists && p2Equity > p1Equity) {
         match.winner = match.player2.userId;
       }
     }
@@ -216,27 +233,38 @@ router.put('/:id', authMiddleware, async (req, res, next) => {
 
     // Update stats if completed
     if (match.status === 'COMPLETED') {
+      console.log('[UpdateMatch] Updating User Stats...');
       // Update player 1
       const p1 = await User.findById(match.player1.userId);
-      p1.stats.totalMatches += 1;
-      p1.stats.totalPnL += match.player1.finalPnL;
-      p1.stats.avgPnL = p1.stats.totalPnL / p1.stats.totalMatches;
-      if (match.winner && match.winner.toString() === p1._id.toString()) p1.stats.wins += 1;
-      else if (match.winner) p1.stats.losses += 1;
-      await p1.save();
+      if (p1) {
+        p1.stats.totalMatches += 1;
+        p1.stats.totalPnL += match.player1.finalPnL;
+        p1.stats.avgPnL = p1.stats.totalPnL / p1.stats.totalMatches;
+        if (match.winner && match.winner.toString() === p1._id.toString()) p1.stats.wins += 1;
+        else if (match.winner && match.winner.toString() !== p1._id.toString()) p1.stats.losses += 1;
+        // Note: Draw counts as neither win nor loss in this logic? Or simplistic?
+        await p1.save();
+        console.log(`[UpdateMatch] Updated P1 stats: ${p1.username}`);
+      }
 
       // Update player 2
-      const p2 = await User.findById(match.player2.userId);
-      p2.stats.totalMatches += 1;
-      p2.stats.totalPnL += match.player2.finalPnL;
-      p2.stats.avgPnL = p2.stats.totalPnL / p2.stats.totalMatches;
-      if (match.winner && match.winner.toString() === p2._id.toString()) p2.stats.wins += 1;
-      else if (match.winner) p2.stats.losses += 1;
-      await p2.save();
+      if (p2Exists) {
+        const p2 = await User.findById(match.player2.userId);
+        if (p2) {
+          p2.stats.totalMatches += 1;
+          p2.stats.totalPnL += match.player2.finalPnL;
+          p2.stats.avgPnL = p2.stats.totalPnL / p2.stats.totalMatches;
+          if (match.winner && match.winner.toString() === p2._id.toString()) p2.stats.wins += 1;
+          else if (match.winner && match.winner.toString() !== p2._id.toString()) p2.stats.losses += 1;
+          await p2.save();
+          console.log(`[UpdateMatch] Updated P2 stats: ${p2.username}`);
+        }
+      }
     }
 
     res.json(match);
   } catch (error) {
+    console.error('[UpdateMatch] Error:', error);
     next(error);
   }
 });
