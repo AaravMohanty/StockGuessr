@@ -45,6 +45,7 @@ export const authAPI = {
   login: (email: string, password: string) =>
     api.post('/auth/login', { email, password }),
   getCurrentUser: () => api.get('/auth/me'),
+  deleteAccount: () => api.delete('/auth/delete'),
 };
 
 // Scenarios endpoints

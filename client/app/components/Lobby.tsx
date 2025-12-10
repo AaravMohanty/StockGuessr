@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Copy, ArrowRight, Users, Play } from "lucide-react";
-import { matchesAPI } from "@/lib/api";
+import { Copy, ArrowRight, Users, Play, Trash2 } from "lucide-react";
+import { matchesAPI, authAPI } from "@/lib/api";
+import { useRouter } from "next/navigation";
 
 interface LobbyProps {
     onMatchStart: (matchData: any) => void;
@@ -15,6 +16,7 @@ export default function Lobby({ onMatchStart }: LobbyProps) {
     const [createdCode, setCreatedCode] = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState("");
+    const router = useRouter();
 
     const handleCreateMatch = async () => {
         try {
@@ -57,6 +59,21 @@ export default function Lobby({ onMatchStart }: LobbyProps) {
         }
     };
 
+    const handleDeleteAccount = async () => {
+        if (confirm("Are you sure you want to delete your account? This action cannot be undone.")) {
+            try {
+                setIsLoading(true);
+                await authAPI.deleteAccount();
+                localStorage.removeItem("token");
+                router.push("/");
+            } catch (err) {
+                console.error(err);
+                setError("Failed to delete account");
+                setIsLoading(false);
+            }
+        }
+    };
+
     return (
         <div className="w-full max-w-md mx-auto bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl p-8 shadow-2xl relative overflow-hidden">
             <div className="absolute inset-0 bg-gradient-to-br from-purple-500/10 to-blue-500/10" />
@@ -89,6 +106,15 @@ export default function Lobby({ onMatchStart }: LobbyProps) {
                             >
                                 <Users className="w-5 h-5" />
                                 Join Match
+                            </button>
+
+                            <button
+                                onClick={handleDeleteAccount}
+                                disabled={isLoading}
+                                className="w-full py-3 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 font-bold text-sm transition-all flex items-center justify-center gap-2 mt-8"
+                            >
+                                <Trash2 className="w-4 h-4" />
+                                Delete Account
                             </button>
                         </motion.div>
                     )}

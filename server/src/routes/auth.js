@@ -88,4 +88,21 @@ router.get('/me', authMiddleware, async (req, res, next) => {
   }
 });
 
+// Delete account
+router.delete('/delete', authMiddleware, async (req, res, next) => {
+  try {
+    const user = await User.findById(req.userId);
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    await User.findByIdAndDelete(req.userId);
+
+    res.json({ message: 'Account deleted successfully' });
+  } catch (error) {
+    next(error);
+  }
+});
+
 module.exports = router;
